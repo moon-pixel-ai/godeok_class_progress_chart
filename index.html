@@ -228,35 +228,60 @@ const handleLogout = async () => {
         setUser(null); // 그냥 깨끗하게 로그아웃만 합니다.
     } catch (err) { console.error("로그아웃 실패:", err); } 
 };
-            // 데이터 실시간 동기화
-            useEffect(() => {
-                if (!user || user.isAnonymous || !db || isAuthChecking) return;
-                
-                setIsInitialLoading(true);
-                const colNames = ['classes', 'weekly', 'events', 'overrides'];
-                const unsubscribes = colNames.map(name => {
-                    return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        if (name === 'classes') {
-                            const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                            setClasses(sorted);
-                            setSelectedClassId(prevId => {
-                                if (!sorted.length) return null;
-                                if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
-                                return prevId;
-                            });
-                        } else if (name === 'weekly') setWeekly(data);
-                        else if (name === 'events') setEvents(data);
-                        else if (name === 'overrides') setOverrides(data);
-                        
-                        setIsInitialLoading(false);
-                    }, (err) => { 
-                        console.error(`Firestore Error (${name}):`, err); 
-                        setIsInitialLoading(false); 
+            // 데이터 실시간 동기화 (권한 오류 완벽 해결 버전)
+useEffect(() => {
+    if (!user || !db || isAuthChecking) return;
+
+    let isMounted = true;
+    const unsubscribes = [];
+
+    const fetchWithFreshToken = async () => {
+        setIsInitialLoading(true);
+        
+        try {
+            // ★ 핵심 마법: 창고(Firestore) 문을 열기 전에, 구글 출입증(토큰)을 강제로 가장 최신 상태로 갱신합니다!
+            await user.getIdToken(true);
+        } catch (e) {
+            console.warn("출입증 확인 지연 (새로고침 중):", e);
+        }
+
+        if (!isMounted) return; // 그 사이에 화면을 껐다면 중지
+
+        const colNames = ['classes', 'weekly', 'events', 'overrides'];
+        
+        colNames.forEach(name => {
+            const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
+                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                if (name === 'classes') {
+                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                    setClasses(sorted);
+                    setSelectedClassId(prevId => {
+                        if (!sorted.length) return null;
+                        if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
+                        return prevId;
                     });
-                });
-                return () => unsubscribes.forEach(un => un());
-            }, [user, isAuthChecking]);
+                } else if (name === 'weekly') setWeekly(data);
+                else if (name === 'events') setEvents(data);
+                else if (name === 'overrides') setOverrides(data);
+
+                setIsInitialLoading(false);
+            }, (err) => {
+                // 쫓겨났을 때 여기서 에러가 났던 겁니다! 이제 안 납니다.
+                console.error(`창고 접근 권한 오류 (${name}):`, err);
+                setIsInitialLoading(false);
+            });
+            unsubscribes.push(un);
+        });
+    };
+
+    fetchWithFreshToken();
+
+    return () => {
+        isMounted = false;
+        unsubscribes.forEach(un => un());
+    };
+}, [user, isAuthChecking]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

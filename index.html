@@ -52,27 +52,26 @@
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-        const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
-        const PERIODS = Array.from({ length: 7 }, (_, i) => `${i + 1}교시`);
-        const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
-        const EMPTY_SLOT = "__EMPTY__";
-
-        const firebaseConfig = {
+        // --- 전역 설정 및 초기화 ---
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
             authDomain: "moon-pixel.firebaseapp.com",
             projectId: "moon-pixel",
             storageBucket: "moon-pixel.firebasestorage.app",
             messagingSenderId: "690517363714",
-            appId: "1:690517363714:web:a5204517fcc83982942b1b",
-            measurementId: "G-V5C04W4EG3"
+            appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-stable';
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        
-        // [중요] appId를 고정하여 코드 수정 시에도 데이터 경로가 유지되도록 합니다.
-        const appId = 'godeok-ms-planner-v2'; 
+
+        // --- 상수 ---
+        const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
+        const PERIODS = Array.from({ length: 7 }, (_, i) => `${i + 1}교시`);
+        const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
+        const EMPTY_SLOT = "__EMPTY__";
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
@@ -192,45 +191,37 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] 새로고침 시 기존 구글 로그인 세션을 끝까지 기다린 후 없을 때만 익명 로그인 수행
+            // [수정 핵심] React + Firebase 표준 패턴 (새로고침 시 리셋 방지)
             useEffect(() => {
-                let authSettled = false;
-                
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
+                        // 세션 유지 설정
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // 1. 커스텀 토큰 확인
+                        // 1단계: 토큰 기반 로그인 시도
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            try { await signInWithCustomToken(auth, __initial_auth_token); return; } catch(e){}
-                        }
-
-                        // 2. 1.5초간 기존 세션 복구 대기
-                        setTimeout(async () => {
-                            if (!authSettled && !auth.currentUser) {
-                                try { await signInAnonymously(auth); } catch(e){}
-                                setIsAuthChecking(false);
-                            }
-                        }, 1500);
-
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } 
+                        // 구글 세션 복구는 onAuthStateChanged가 처리하도록 비워둡니다.
                     } catch (err) { 
                         console.error("Auth init error:", err); 
-                        setIsAuthChecking(false);
                     }
                 };
                 
                 initAuth();
 
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                const unsubscribe = onAuthStateChanged(auth, async (u) => {
                     if (u) {
-                        authSettled = true;
                         setUser(u);
                         setIsAuthChecking(false);
                     } else {
-                        // 로그아웃 시에만 초기화
-                        setUser(null);
-                        setClasses([]); setWeekly([]); setEvents([]); setOverrides([]);
+                        // 세션 복구 시도가 실패한 경우에만 익명 로그인 수행
+                        try {
+                            const anon = await signInAnonymously(auth);
+                            setUser(anon.user);
+                        } catch(e) { console.error(e); }
+                        setIsAuthChecking(false);
                     }
                 });
                 return () => unsubscribe();
@@ -250,12 +241,15 @@
             const handleLogout = async () => { 
                 try { 
                     await signOut(auth); 
-                    await signInAnonymously(auth); 
+                    // 로그아웃 즉시 새 익명 계정으로 전환 (필수 데이터 초기화 방지)
+                    const anon = await signInAnonymously(auth);
+                    setUser(anon.user);
                 } catch (err) { console.error(err); } 
             };
 
+            // 데이터 실시간 동기화 (userId가 안정화된 후 실행)
             useEffect(() => {
-                if (!user || !db) { setIsInitialLoading(false); return; }
+                if (!user || !db || isAuthChecking) return;
                 
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
@@ -281,7 +275,7 @@
                     });
                 });
                 return () => unsubscribes.forEach(un => un());
-            }, [user]);
+            }, [user, isAuthChecking]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
@@ -541,7 +535,7 @@
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 상태 복구 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">

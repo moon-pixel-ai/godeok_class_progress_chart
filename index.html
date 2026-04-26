@@ -28,7 +28,6 @@
         .dragging-cell { opacity: 0.2; transform: scale(0.92); filter: grayscale(1); transition: all 0.2s ease; }
         .drop-target-active { background-color: #f0f9ff !important; border-color: #0ea5e9 !important; border-style: dashed !important; box-shadow: inset 0 0 15px rgba(14, 165, 233, 0.1) !important; transform: scale(1.02); z-index: 20; }
         
-        /* 사이드바 드래그 전용 스타일 */
         .sidebar-dragging { opacity: 0.5; background-color: #f1f5f9; border: 2px dashed #cbd5e1; }
         
         .timetable-scroll-area { position: relative; max-height: calc(100vh - 240px); overflow: auto; border-radius: 24px; background: #ffffff; }
@@ -71,9 +70,10 @@
   appId: "1:690517363714:web:a5204517fcc83982942b1b",
   measurementId: "G-V5C04W4EG3"
 };
-// 위에서 만든 설정값으로 앱을 실행합니다.
-app = initializeApp(firebaseConfig);
-auth = getAuth(app);
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
 db = getFirestore(app);
         } catch (e) { console.error("Firebase 초기화 실패:", e); }
 
@@ -220,7 +220,8 @@ db = getFirestore(app);
                 initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
                     setUser(u);
-                    if (!u || u.isAnonymous) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
+                    // [수정] u가 없을 때만 데이터를 초기화합니다. 익명 사용자(Guest)도 데이터를 유지하도록 변경.
+                    if (!u) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
                 });
                 return () => unsubscribe();
             }, []);
@@ -237,7 +238,8 @@ db = getFirestore(app);
             const handleLogout = async () => { try { await signOut(auth); await signInAnonymously(auth); } catch (err) { console.error(err); } };
 
             useEffect(() => {
-                if (!user || user.isAnonymous || !db) { setIsInitialLoading(false); return; }
+                // [수정] user.isAnonymous 체크를 제거하여 익명 사용자도 Firestore에서 데이터를 불러오도록 허용합니다.
+                if (!user || !db) { setIsInitialLoading(false); return; }
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
                 const unsubscribes = colNames.map(name => {
@@ -270,7 +272,7 @@ db = getFirestore(app);
             }, [overrides, events]);
 
             const undo = useCallback(async () => {
-                if (history.length === 0 || !user || user.isAnonymous || !db) return;
+                if (history.length === 0 || !user || !db) return;
                 const { overrides: prevOverrides, events: prevEvents } = history[history.length - 1];
                 setHistory(prevHistory => prevHistory.slice(0, -1));
                 try {
@@ -329,7 +331,7 @@ db = getFirestore(app);
             };
 
             const refreshRemaining = async () => {
-                if (!user || user.isAnonymous || !db) return;
+                if (!user || !db) return;
                 const batch = writeBatch(db);
                 classes.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { remainingBeforeExam: countRemaining(c.name) }); });
                 await batch.commit();
@@ -337,7 +339,7 @@ db = getFirestore(app);
             };
 
             const handleScheduleUpload = async (e) => {
-                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                if (!user || !db) return setModalMsg("로그인이 필요합니다.");
                 const file = e.target.files[0]; if (!file) return;
                 const reader = new FileReader();
                 reader.onload = async (evt) => {
@@ -382,7 +384,7 @@ db = getFirestore(app);
             };
 
             const handleEventUpload = async (e) => {
-                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                if (!user || !db) return setModalMsg("로그인이 필요합니다.");
                 const file = e.target.files[0]; if (!file) return;
                 const reader = new FileReader();
                 reader.onload = async (evt) => {
@@ -431,7 +433,7 @@ db = getFirestore(app);
             };
 
             const handleAddManualEvent = async () => {
-                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                if (!user || !db) return setModalMsg("로그인이 필요합니다.");
                 if (!manualDate || !manualTitle.trim()) return;
                 if (manualPeriods.length === 0) return setModalMsg("교시를 하나 이상 선택해 주세요.");
                 pushHistory();
@@ -446,7 +448,7 @@ db = getFirestore(app);
             };
 
             const handleDeleteEvent = async (id) => {
-                if (!user || user.isAnonymous || !db || !id) return;
+                if (!user || !db || !id) return;
                 try { 
                     pushHistory();
                     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); 
@@ -454,7 +456,7 @@ db = getFirestore(app);
             };
 
             const resetOnlyOverrides = async () => {
-                if (!user || user.isAnonymous || !db) return;
+                if (!user || !db) return;
                 setConfirmModal(null);
                 try {
                     const batch = writeBatch(db);
@@ -466,7 +468,7 @@ db = getFirestore(app);
             };
 
             const resetSemesterData = async () => {
-                if (!user || user.isAnonymous || !db) return;
+                if (!user || !db) return;
                 setConfirmModal(null);
                 try {
                     const batch = writeBatch(db);
@@ -481,18 +483,13 @@ db = getFirestore(app);
                 } catch (err) { setModalMsg("초기화 중 오류 발생"); }
             };
 
-            // [추가] 학급 순서 변경 로직
             const handleClassReorder = async (fromIndex, toIndex) => {
-                if (!user || user.isAnonymous || !db) return;
+                if (!user || !db) return;
                 const newClasses = [...classes];
                 const [movedItem] = newClasses.splice(fromIndex, 1);
                 newClasses.splice(toIndex, 0, movedItem);
-                
-                // 로컬 상태 즉시 반영
                 const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
                 setClasses(updatedWithOrder);
-
-                // 서버 업데이트
                 try {
                     const batch = writeBatch(db);
                     updatedWithOrder.forEach(c => {
@@ -574,7 +571,7 @@ db = getFirestore(app);
             };
 
             const saveCellEdit = async () => {
-                if (!user || user.isAnonymous || selectedCells.length === 0 || !db) return;
+                if (!user || selectedCells.length === 0 || !db) return;
                 pushHistory();
                 const batch = writeBatch(db);
                 selectedCells.forEach(cell => {
@@ -591,7 +588,7 @@ db = getFirestore(app);
 
             const handleDrop = async (e, targetDate, targetPeriod) => {
                 e.preventDefault(); setDragOverCell(null);
-                if (!user || user.isAnonymous || !dragSource || !db) return;
+                if (!user || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
                 pushHistory();
                 const batch = writeBatch(db);
@@ -607,7 +604,7 @@ db = getFirestore(app);
             };
 
             const updateClassOnServer = async () => {
-                if (!user || user.isAnonymous || !db || !selectedClassId) return;
+                if (!user || !db || !selectedClassId) return;
                 const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
                 setModalMsg("클라우드 저장 완료!");
@@ -626,27 +623,16 @@ db = getFirestore(app);
                         <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
                         <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
                         
-                        {/* [수정] 사이드바 드래그 순서 변경 적용 부분 */}
                         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
                             <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그하여 순서 변경)</p> 
                             {classes.length > 0 ? classes.map((c, index) => ( 
                                 <div 
                                     key={c.id} 
                                     draggable={true}
-                                    onDragStart={(e) => {
-                                        e.dataTransfer.setData("classIndex", index);
-                                        e.currentTarget.classList.add("sidebar-dragging");
-                                    }}
-                                    onDragEnd={(e) => {
-                                        e.currentTarget.classList.remove("sidebar-dragging");
-                                    }}
+                                    onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }}
+                                    onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }}
                                     onDragOver={(e) => e.preventDefault()}
-                                    onDrop={(e) => {
-                                        e.preventDefault();
-                                        const fromIndex = parseInt(e.dataTransfer.getData("classIndex"));
-                                        const toIndex = index;
-                                        if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex);
-                                    }}
+                                    onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }}
                                     className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 cursor-grab active:cursor-grabbing ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`}
                                 >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
@@ -660,7 +646,7 @@ db = getFirestore(app);
                             )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic">데이터 로딩 대기 중...</p> </div> )} 
                         </div>
 
-                        {user && !user.isAnonymous && ( 
+                        {user && ( 
                             <div className="p-6 border-t border-slate-100 space-y-3"> 
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-2">데이터 관리 및 학기 전환</p>
                                 <input ref={scheduleFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleScheduleUpload} /> 
@@ -676,11 +662,11 @@ db = getFirestore(app);
                     </div>
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
-                            <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user || user.isAnonymous} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
-                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연결됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user || user.isAnonymous} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
+                            <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : (user ? '로컬 저장 모드' : '로그인 필요')} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
                         </header>
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            {!user || user.isAnonymous ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
+                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
                                 <div className="max-w-[1600px] mx-auto space-y-6">
                                     <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
                                         <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">배치를 변경하면 (수정) 라벨이 표시됩니다. 가로로 스크롤하여 다음 주 일정을 확인하세요.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
@@ -776,7 +762,7 @@ db = getFirestore(app);
                                                         <label className="text-[10px] font-black text-slate-400 uppercase ml-2">적용 교시</label>
                                                         <div className="flex flex-wrap gap-2">
                                                             <button type="button" onClick={() => toggleManualPeriod("전교시")} className={`px-5 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes("전교시") ? "bg-sky-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>전교시</button>
-                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}Pi
+                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}
                                                         </div>
                                                     </div>
                                                     <div className="pt-2">

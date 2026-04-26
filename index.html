@@ -47,7 +47,7 @@
 
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -192,30 +192,24 @@
                 return days;
             }, [weekBaseDate]);
 
-        // [최종 수정본] 익명 로그인을 빼고 구글 로그인 유지에만 집중합니다!
+// [최종 해결본] 복잡한 강제 세팅을 없애고, 순수하게 로그인 상태만 감지합니다!
 useEffect(() => {
-    const initAuth = async () => {
-        setIsAuthChecking(true);
-        try {
-            // 브라우저가 로그인 정보를 기억하도록 설정합니다.
-            await setPersistence(auth, browserLocalPersistence);
-            
-           onAuthStateChanged(auth, (u) => {
-    // 1. 구글 로그인 기록이 있는지 확인합니다.
-    if (u) {
-        setUser(u); // 주인이 맞으면 주인으로 인정!
-    } else {
-        setUser(null); // 주인이 없으면 임시 계정 만들지 말고 기다림!
-    }
-    // 2. 확인이 끝났으니 이제 화면을 보여줍니다.
-    setIsAuthChecking(false);
-});
-        } catch (err) { 
-            console.error("인증 초기화 실패:", err);
-            setIsAuthChecking(false);
+    setIsAuthChecking(true);
+    
+    // 구글 성지기에게 "주인님 들어오시는지만 잘 봐!"라고 감시카메라만 달아둡니다.
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+        if (u) {
+            // 구글 로그인된 진짜 주인이 맞으면 문 열어줌!
+            setUser(u);
+        } else {
+            // 아무도 안 들어왔으면 빈 자리로 대기!
+            setUser(null);
         }
-    };
-    initAuth();
+        // 확인이 1초 만에 끝났으니 로딩 화면(뱅글뱅글) 바로 끄기!
+        setIsAuthChecking(false);
+    });
+
+    return () => unsubscribe();
 }, []);
             const handleGoogleLogin = async () => {
                 const provider = new GoogleAuthProvider();

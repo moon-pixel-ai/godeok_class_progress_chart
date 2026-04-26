@@ -57,11 +57,7 @@
         const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
         const EMPTY_SLOT = "__EMPTY__";
 
-        let app, auth, db;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
-        
-        try {
-            const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
   authDomain: "moon-pixel.firebaseapp.com",
   projectId: "moon-pixel",
@@ -70,11 +66,17 @@
   appId: "1:690517363714:web:a5204517fcc83982942b1b",
   measurementId: "G-V5C04W4EG3"
 };
-// 위에서 만든 설정값으로 앱을 실행합니다.
-app = initializeApp(firebaseConfig);
-auth = getAuth(app);
-db = getFirestore(app);
-        } catch (e) { console.error("Firebase 초기화 실패:", e); }
+
+let app, auth, db;
+const appId = 'godeok-ms-planner';
+
+try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+        } catch (e) { 
+            console.error("Firebase 초기화 실패:", e); 
+        }
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
@@ -120,7 +122,9 @@ db = getFirestore(app);
         const makeId = (p) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
         const shortClass = (s) => (s && s !== EMPTY_SLOT) ? s.replace(/학년\s+/g, '-').replace(/반/g, '') : "-";
         const getGrade = (name) => { const match = name?.match(/(\d)/); return match ? parseInt(match[1]) : 0; };
+        
         const getSafeDate = (dateStr) => new Date(dateStr + "T00:00:00");
+
         const getLocalIsoString = (d) => {
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -219,7 +223,7 @@ db = getFirestore(app);
                 initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
                     setUser(u);
-                    // [수정] u가 없을 때만 데이터를 초기화합니다. 익명 사용자(Guest)도 데이터를 유지하도록 변경.
+                    // u가 없으면 상태를 초기화하지만, 로딩 중에는 초기화하지 않습니다.
                     if (!u) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
                 });
                 return () => unsubscribe();
@@ -237,7 +241,6 @@ db = getFirestore(app);
             const handleLogout = async () => { try { await signOut(auth); await signInAnonymously(auth); } catch (err) { console.error(err); } };
 
             useEffect(() => {
-                // [수정] user.isAnonymous 체크를 제거하여 익명 사용자도 Firestore에서 데이터를 불러오도록 허용합니다.
                 if (!user || !db) { setIsInitialLoading(false); return; }
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
@@ -256,7 +259,10 @@ db = getFirestore(app);
                         else if (name === 'events') setEvents(data);
                         else if (name === 'overrides') setOverrides(data);
                         setIsInitialLoading(false);
-                    }, (err) => { console.error("Firestore Snapshot Error:", err); setIsInitialLoading(false); });
+                    }, (err) => { 
+                        console.error("Firestore Snapshot Error:", err); 
+                        setIsInitialLoading(false); 
+                    });
                 });
                 return () => unsubscribes.forEach(un => un());
             }, [user]);
@@ -303,6 +309,7 @@ db = getFirestore(app);
                 const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({ ...e, dateObj: getSafeDate(e.date) })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
                 const targetExam = upcomingExams[0];
                 if (!targetExam) return 0;
+                
                 const end = targetExam.dateObj;
                 let count = 0;
                 const d = new Date(today);
@@ -662,7 +669,7 @@ db = getFirestore(app);
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
                             <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
-                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : (user ? '로컬 저장 모드' : '로그인 필요')} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : (user ? 'bg-slate-100 text-slate-400 border border-slate-200' : 'bg-slate-50 text-slate-300 border border-slate-100')}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : (user ? '로컬 저장 모드' : '로그인 필요')} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
                         </header>
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (

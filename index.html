@@ -192,36 +192,35 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [핵심 해결] 새로고침 시 세션 복구를 완벽히 기다리는 로직
-            useEffect(() => {
-                const initAuth = async () => {
-                    setIsAuthChecking(true);
+           // [데이터 복구 버그 수정본]
+useEffect(() => {
+    const initAuth = async () => {
+        setIsAuthChecking(true);
+        try {
+            await setPersistence(auth, browserLocalPersistence);
+            
+            onAuthStateChanged(auth, async (u) => {
+                if (u) {
+                    // 1. 먼저 사용자가 누구인지 등록합니다.
+                    setUser(u);
+                    // 2. 그 다음 '인증 확인 중' 상태를 해제합니다.
+                    // 이렇게 해야 아래쪽에 있는 데이터 로딩(onSnapshot) 레이더가 즉시 작동합니다.
+                    setTimeout(() => setIsAuthChecking(false), 100); 
+                } else {
                     try {
-                        await setPersistence(auth, browserLocalPersistence);
-                        
-                        // 구글/익명 세션이 있는지 확인될 때까지 UI를 아예 보여주지 않습니다.
-                        onAuthStateChanged(auth, async (u) => {
-                            if (u) {
-                                // 세션 복구 성공
-                                setUser(u);
-                                setIsAuthChecking(false);
-                            } else {
-                                // 세션이 아예 없음 -> 신규 익명 계정 생성
-                                try {
-                                    const anon = await signInAnonymously(auth);
-                                    setUser(anon.user);
-                                } catch(e) { console.error("Anonymous fail:", e); }
-                                setIsAuthChecking(false);
-                            }
-                        });
-                    } catch (err) { 
-                        console.error("Auth init error:", err); 
-                        setIsAuthChecking(false);
-                    }
-                };
-                initAuth();
-            }, []);
-
+                        const anon = await signInAnonymously(auth);
+                        setUser(anon.user);
+                    } catch(e) { console.error("신규 접속 오류:", e); }
+                    setIsAuthChecking(false);
+                }
+            });
+        } catch (err) { 
+            console.error("인증 초기화 오류:", err);
+            setIsAuthChecking(false);
+        }
+    };
+    initAuth();
+}, []);
             const handleGoogleLogin = async () => {
                 const provider = new GoogleAuthProvider();
                 try {

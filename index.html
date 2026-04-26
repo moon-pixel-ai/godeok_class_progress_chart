@@ -4,16 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>고덕중 개인별 학사 진도 관리 시스템</title>
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com/"></script>
-    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
     <style>
@@ -47,7 +42,7 @@
 
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -57,26 +52,21 @@
         const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
         const EMPTY_SLOT = "__EMPTY__";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
-  authDomain: "moon-pixel.firebaseapp.com",
-  projectId: "moon-pixel",
-  storageBucket: "moon-pixel.firebasestorage.app",
-  messagingSenderId: "690517363714",
-  appId: "1:690517363714:web:a5204517fcc83982942b1b",
-  measurementId: "G-V5C04W4EG3"
-};
+        const firebaseConfig = {
+            apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
+            authDomain: "moon-pixel.firebaseapp.com",
+            projectId: "moon-pixel",
+            storageBucket: "moon-pixel.firebasestorage.app",
+            messagingSenderId: "690517363714",
+            appId: "1:690517363714:web:a5204517fcc83982942b1b",
+            measurementId: "G-V5C04W4EG3"
+        };
 
-let app, auth, db;
-const appId = 'godeok-ms-planner';
-
-try {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-        } catch (e) { 
-            console.error("Firebase 초기화 실패:", e); 
-        }
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
@@ -122,9 +112,7 @@ try {
         const makeId = (p) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
         const shortClass = (s) => (s && s !== EMPTY_SLOT) ? s.replace(/학년\s+/g, '-').replace(/반/g, '') : "-";
         const getGrade = (name) => { const match = name?.match(/(\d)/); return match ? parseInt(match[1]) : 0; };
-        
         const getSafeDate = (dateStr) => new Date(dateStr + "T00:00:00");
-
         const getLocalIsoString = (d) => {
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
@@ -211,31 +199,39 @@ try {
             }, [weekBaseDate]);
 
             useEffect(() => {
-                if (!auth) { setIsAuthChecking(false); return; }
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } 
-                        else { await signInAnonymously(auth); }
+                        await setPersistence(auth, browserLocalPersistence);
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            try {
+                                await signInWithCustomToken(auth, __initial_auth_token);
+                            } catch (tokenErr) {
+                                await signInAnonymously(auth);
+                            }
+                        } else {
+                            await signInAnonymously(auth);
+                        }
                     } catch (err) { console.error("Auth init error:", err); }
                     finally { setIsAuthChecking(false); }
                 };
                 initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
                     setUser(u);
-                    // u가 없으면 상태를 초기화하지만, 로딩 중에는 초기화하지 않습니다.
                     if (!u) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
                 });
                 return () => unsubscribe();
             }, []);
 
             const handleGoogleLogin = async () => {
-                if (!auth) { setModalMsg("클라우드 설정이 감지되지 않습니다."); return; }
                 const provider = new GoogleAuthProvider();
                 try {
                     const result = await signInWithPopup(auth, provider);
                     if (result.user) setModalMsg(`${result.user.displayName} 선생님, 반갑습니다!`);
-                } catch (err) { console.error("Login error:", err); setModalMsg("로그인 중 오류가 발생했습니다."); }
+                } catch (err) { 
+                    console.error("Login error:", err); 
+                    setModalMsg(`로그인 중 오류가 발생했습니다: ${err.message}`); 
+                }
             };
 
             const handleLogout = async () => { try { await signOut(auth); await signInAnonymously(auth); } catch (err) { console.error(err); } };
@@ -259,16 +255,14 @@ try {
                         else if (name === 'events') setEvents(data);
                         else if (name === 'overrides') setOverrides(data);
                         setIsInitialLoading(false);
-                    }, (err) => { 
-                        console.error("Firestore Snapshot Error:", err); 
-                        setIsInitialLoading(false); 
-                    });
+                    }, (err) => { console.error("Firestore Error:", err); setIsInitialLoading(false); });
                 });
                 return () => unsubscribes.forEach(un => un());
             }, [user]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
+            // [핵심 수정] 히스토리 저장 로직 강화
             const pushHistory = useCallback(() => {
                 setHistory(prev => [...prev, { 
                     overrides: JSON.parse(JSON.stringify(overrides)), 
@@ -276,20 +270,37 @@ try {
                 }].slice(-30));
             }, [overrides, events]);
 
+            // [핵심 수정] 롤백 로직 강화 (Batch Delete & Restore)
             const undo = useCallback(async () => {
                 if (history.length === 0 || !user || !db) return;
-                const { overrides: prevOverrides, events: prevEvents } = history[history.length - 1];
+                
+                const lastState = history[history.length - 1];
+                const prevOverrides = lastState.overrides;
+                const prevEvents = lastState.events;
+                
                 setHistory(prevHistory => prevHistory.slice(0, -1));
+
                 try {
                     const batch = writeBatch(db);
-                    const oSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    oSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevOverrides.forEach(o => batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o));
-                    const eSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
-                    eSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevEvents.forEach(e => batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e));
+                    
+                    // 1. 현재 Overrides 전체 삭제 후 복구
+                    const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
+                    prevOverrides.forEach(o => {
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o);
+                    });
+
+                    // 2. 현재 Events 전체 삭제 후 복구
+                    const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+                    currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
+                    prevEvents.forEach(e => {
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e);
+                    });
+
                     await batch.commit();
-                } catch (err) { console.error("Undo error:", err); }
+                } catch (err) { 
+                    console.error("Undo 복구 실패:", err); 
+                }
             }, [history, user, db]);
 
             useEffect(() => {
@@ -309,7 +320,6 @@ try {
                 const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({ ...e, dateObj: getSafeDate(e.date) })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
                 const targetExam = upcomingExams[0];
                 if (!targetExam) return 0;
-                
                 const end = targetExam.dateObj;
                 let count = 0;
                 const d = new Date(today);
@@ -382,7 +392,7 @@ try {
                             batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
                         });
                         await batch.commit();
-                        setModalMsg("새로운 학기 시간표가 업로드되었습니다.\n기존 수업 내역이 리빌딩되었습니다.");
+                        setModalMsg("시간표 업로드 완료!");
                     } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
                 };
                 reader.readAsBinaryString(file);
@@ -441,7 +451,6 @@ try {
             const handleAddManualEvent = async () => {
                 if (!user || !db) return setModalMsg("로그인이 필요합니다.");
                 if (!manualDate || !manualTitle.trim()) return;
-                if (manualPeriods.length === 0) return setModalMsg("교시를 하나 이상 선택해 주세요.");
                 pushHistory();
                 const batch = writeBatch(db);
                 manualPeriods.forEach(p => { 
@@ -450,43 +459,12 @@ try {
                 });
                 await batch.commit();
                 setManualTitle("");
-                setManualPeriods(["전교시"]);
             };
 
             const handleDeleteEvent = async (id) => {
                 if (!user || !db || !id) return;
-                try { 
-                    pushHistory();
-                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); 
-                } catch (err) { console.error("Delete Error:", err); setModalMsg("일정 삭제 중 오류가 발생했습니다."); }
-            };
-
-            const resetOnlyOverrides = async () => {
-                if (!user || !db) return;
-                setConfirmModal(null);
-                try {
-                    const batch = writeBatch(db);
-                    const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    oldOverrides.docs.forEach(d => batch.delete(d.ref));
-                    await batch.commit();
-                    setModalMsg("수업 수정 및 세부 내역이 초기화되었습니다.");
-                } catch (err) { setModalMsg("초기화 중 오류 발생"); }
-            };
-
-            const resetSemesterData = async () => {
-                if (!user || !db) return;
-                setConfirmModal(null);
-                try {
-                    const batch = writeBatch(db);
-                    const oldWeekly = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'weekly'));
-                    oldWeekly.docs.forEach(d => batch.delete(d.ref));
-                    const oldClasses = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
-                    oldClasses.docs.forEach(d => batch.delete(d.ref));
-                    const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    oldOverrides.docs.forEach(d => batch.delete(d.ref));
-                    await batch.commit();
-                    setModalMsg("전체 수업 데이터가 초기화되었습니다.\n새로운 학기 시간표를 업로드할 수 있습니다.");
-                } catch (err) { setModalMsg("초기화 중 오류 발생"); }
+                pushHistory();
+                try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
             };
 
             const handleClassReorder = async (fromIndex, toIndex) => {
@@ -498,19 +476,9 @@ try {
                 setClasses(updatedWithOrder);
                 try {
                     const batch = writeBatch(db);
-                    updatedWithOrder.forEach(c => {
-                        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { orderIndex: c.orderIndex });
-                    });
+                    updatedWithOrder.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { orderIndex: c.orderIndex }); });
                     await batch.commit();
-                } catch (err) { console.error("Reorder Save Error:", err); }
-            };
-
-            const toggleManualPeriod = (p) => {
-                if (p === "전교시") { setManualPeriods(["전교시"]); } else {
-                    let next = manualPeriods.filter(v => v !== "전교시");
-                    if (next.includes(p)) { next = next.filter(v => v !== p); if (next.length === 0) next = ["전교시"]; } else { next.push(p); }
-                    setManualPeriods(next.sort());
-                }
+                } catch (err) { console.error(err); }
             };
 
             const getScheduleForDate = (date) => {
@@ -578,7 +546,7 @@ try {
 
             const saveCellEdit = async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
-                pushHistory();
+                pushHistory(); // 변경 직전 상태 저장
                 const batch = writeBatch(db);
                 selectedCells.forEach(cell => {
                     const { date, period } = cell;
@@ -596,12 +564,9 @@ try {
                 e.preventDefault(); setDragOverCell(null);
                 if (!user || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                pushHistory();
+                
+                pushHistory(); // 드래그 시작 전 상태 저장
                 const batch = writeBatch(db);
-                const existingTarget = overrides.find(o => o.date === targetDate && o.newPeriod === targetPeriod);
-                if (existingTarget) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', existingTarget.id)); }
-                const existingSource = overrides.find(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
-                if (existingSource) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', existingSource.id)); }
                 const targetId = makeId("o");
                 batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
                 const sourceId = makeId("o");
@@ -613,7 +578,15 @@ try {
                 if (!user || !db || !selectedClassId) return;
                 const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
-                setModalMsg("클라우드 저장 완료!");
+                setModalMsg("기록 저장 완료!");
+            };
+
+            const toggleManualPeriod = (p) => {
+                if (p === "전교시") { setManualPeriods(["전교시"]); } else {
+                    let next = manualPeriods.filter(v => v !== "전교시");
+                    if (next.includes(p)) { next = next.filter(v => v !== p); if (next.length === 0) next = ["전교시"]; } else { next.push(p); }
+                    setManualPeriods(next.sort());
+                }
             };
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
@@ -649,47 +622,42 @@ try {
                                         <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
                                     </button>
                                 </div> 
-                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic">데이터 로딩 대기 중...</p> </div> )} 
+                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic text-center">로그인 후 파일을 업로드하세요.</p> </div> )} 
                         </div>
 
                         {user && ( 
                             <div className="p-6 border-t border-slate-100 space-y-3"> 
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-2">데이터 관리 및 학기 전환</p>
                                 <input ref={scheduleFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleScheduleUpload} /> 
                                 <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
-                                <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-2.5 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드(리빌딩)</Button> 
-                                <div className="grid grid-cols-2 gap-2">
-                                    <button onClick={() => setConfirmModal({ title: "세부 내역 초기화", message: "직접 입력하신 수업 활동명과\n배치 수정 내역만 모두 삭제하시겠습니까?\n(기본 시간표와 학급 목록은 유지됩니다.)", onConfirm: resetOnlyOverrides, onCancel: () => setConfirmModal(null) })} className="p-3 bg-slate-50 text-slate-400 rounded-2xl text-[9px] font-bold border border-slate-100 hover:bg-rose-50 hover:text-rose-500 transition-colors text-center leading-tight">활동 내역만<br/>초기화</button>
-                                    <button onClick={() => setConfirmModal({ title: "전체 데이터 초기화", message: "학사 일정을 제외한 모든 수업 데이터\n(시간표, 학급 목록, 진도 등)를 삭제합니다.\n2학기 전환 시 사용해 주세요.", onConfirm: resetSemesterData, onCancel: () => setConfirmModal(null) })} className="p-3 bg-slate-50 text-slate-400 rounded-2xl text-[9px] font-bold border border-slate-100 hover:bg-rose-50 hover:text-rose-500 transition-colors text-center leading-tight">학기 데이터<br/>전체 초기화</button>
-                                </div>
-                                <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-2.5 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
+                                <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드</Button> 
+                                <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
                             </div> 
                         )}
                     </div>
+
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
                             <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
-                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : (user ? 'bg-slate-100 text-slate-400 border border-slate-200' : 'bg-slate-50 text-slate-300 border border-slate-100')}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : (user ? '로컬 저장 모드' : '로그인 필요')} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
                         </header>
+
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
                                 <div className="max-w-[1600px] mx-auto space-y-6">
                                     <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
                                         <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">배치를 변경하면 (수정) 라벨이 표시됩니다. 가로로 스크롤하여 다음 주 일정을 확인하세요.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                        
                                         <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                             <div className="flex min-w-max">
                                                 <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-24 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
                                                 {currentWeekDays.map((day, dIdx) => {
                                                     const data = getScheduleForDate(day); const dIso = getLocalIsoString(day);
-                                                    return (<div key={day.toString()} className={`timetable-column border-r border-slate-50 ${dIdx >= 5 ? "bg-slate-50/20" : ""}`}><div className="h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm bg-white/90 backdrop-blur-md">
-                                                        <span className={`block text-base font-black leading-none ${day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span>
-                                                        <span className="text-[10px] font-bold text-slate-400 mt-1 block">{day.getMonth()+1}/{day.getDate()}</span>
-                                                    </div>{PERIODS.map(period => {
+                                                    return (<div key={day.toString()} className={`timetable-column border-r border-slate-50 ${dIdx >= 5 ? "bg-slate-50/20" : ""}`}><div className="h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm bg-white/90 backdrop-blur-md"><span className={`block text-base font-black leading-none ${day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className="text-[10px] font-bold text-slate-400 mt-1 block">{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
                                                         const item = data.find(d => d.period === period); 
                                                         const isEditing = editingCell?.date === dIso && editingCell?.period === period; 
                                                         const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); 
                                                         const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
-                                                        const colorClass = item?.hasAnyEvent ? (item.eventType === '시험' ? "bg-indigo-100 border-indigo-400 text-indigo-900" : item.eventType === '휴업' ? "bg-rose-100 border-rose-400 text-rose-900" : "bg-emerald-100 border-emerald-400 text-emerald-900") : getColorForText(item?.customLabel || "");
+                                                        const colorClass = item?.hasAnyEvent ? (item.eventType === '시험' ? "bg-indigo-100 border-indigo-400 text-indigo-900" : "bg-rose-100 border-rose-400 text-rose-900") : getColorForText(item?.customLabel || "");
                                                         return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
                                                             {item?.isEventMode ? (
                                                                 <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center">
@@ -727,6 +695,7 @@ try {
                                             </div>
                                         </div>
                                     </Card>
+
                                     {selectedClass && ( 
                                         <Card className="p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"> 
                                             <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">상세 진도 기록</h2></div> 
@@ -740,19 +709,20 @@ try {
                                             <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>기록 저장하기</Button></div> 
                                         </Card> 
                                     )}
+
                                     <Card className="p-8 shadow-xl shadow-slate-200/40"> 
-                                        <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 추가 및 관리</h2></div> 
+                                        <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 관리</h2></div> 
                                         <div className="grid lg:grid-cols-3 gap-8">
                                             <div className="lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner">
                                                 <div className="flex flex-col gap-6">
                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
                                                         <div className="space-y-2">
                                                             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label>
-                                                            <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all" />
+                                                            <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" />
                                                         </div>
                                                         <div className="space-y-2">
                                                             <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label>
-                                                            <select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all">
+                                                            <select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm">
                                                                 <option value="휴업">휴업 (수업제외)</option>
                                                                 <option value="시험">시험 (수업제외)</option>
                                                                 <option value="행사(수업제외)">행사 (수업제외)</option>
@@ -761,37 +731,26 @@ try {
                                                         </div>
                                                     </div>
                                                     <div className="space-y-2">
-                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용 (대상 학년)</label>
-                                                        <input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all" />
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label>
+                                                        <input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" />
                                                     </div>
-                                                    <div className="space-y-3">
-                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">적용 교시</label>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            <button type="button" onClick={() => toggleManualPeriod("전교시")} className={`px-5 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes("전교시") ? "bg-sky-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>전교시</button>
-                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}
-                                                        </div>
-                                                    </div>
-                                                    <div className="pt-2">
-                                                        <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
-                                                    </div>
+                                                    <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
                                                 </div>
                                             </div>
-                                            <div className="lg:col-span-1 flex flex-col h-full">
-                                                <p className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-2 flex items-center gap-1"><Icon name="list" size={12}/> 이번 주 등록된 일정 관리</p>
-                                                <div className="flex-1 bg-white border border-slate-100 rounded-[32px] overflow-hidden flex flex-col shadow-sm">
-                                                    <div className="overflow-y-auto flex-1 custom-scrollbar p-3">
-                                                        {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
-                                                            events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
-                                                                <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
-                                                                    <div className="flex flex-col gap-1">
-                                                                        <div className="flex items-center gap-2"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-[9px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold">{e.period}</span></div>
-                                                                        <span className="text-xs font-bold text-slate-700 leading-tight">{e.title}</span>
-                                                                    </div>
-                                                                    <button type="button" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors flex-shrink-0 cursor-pointer z-[999] pointer-events-auto"><Icon name="trash-2" size={14}/></button>
+                                            <div className="lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 현재 표시 주간 일정</p>
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                                                    {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
+                                                        events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
+                                                            <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
+                                                                <div className="flex flex-col gap-1">
+                                                                    <span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span>
+                                                                    <span className="text-xs font-bold text-slate-700">{e.title}</span>
                                                                 </div>
-                                                            ))
-                                                        ) : ( <div className="h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic text-center leading-relaxed">등록된 일정이 없습니다.</div> )}
-                                                    </div>
+                                                                <button type="button" onClick={(ev) => { ev.stopPropagation(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash-2" size={14}/></button>
+                                                            </div>
+                                                        ))
+                                                    ) : ( <div className="h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic">등록된 일정이 없습니다.</div> )}
                                                 </div>
                                             </div>
                                         </div>

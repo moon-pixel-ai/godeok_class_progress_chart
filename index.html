@@ -62,12 +62,19 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
         
         try {
-            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-            if (firebaseConfig) {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-            }
+            const firebaseConfig = {
+  apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
+  authDomain: "moon-pixel.firebaseapp.com",
+  projectId: "moon-pixel",
+  storageBucket: "moon-pixel.firebasestorage.app",
+  messagingSenderId: "690517363714",
+  appId: "1:690517363714:web:a5204517fcc83982942b1b",
+  measurementId: "G-V5C04W4EG3"
+};
+// 위에서 만든 설정값으로 앱을 실행합니다.
+app = initializeApp(firebaseConfig);
+auth = getAuth(app);
+db = getFirestore(app);
         } catch (e) { console.error("Firebase 초기화 실패:", e); }
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
@@ -769,7 +776,7 @@
                                                         <label className="text-[10px] font-black text-slate-400 uppercase ml-2">적용 교시</label>
                                                         <div className="flex flex-wrap gap-2">
                                                             <button type="button" onClick={() => toggleManualPeriod("전교시")} className={`px-5 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes("전교시") ? "bg-sky-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>전교시</button>
-                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}
+                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}Pi
                                                         </div>
                                                     </div>
                                                     <div className="pt-2">

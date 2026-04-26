@@ -80,7 +80,8 @@
             messagingSenderId: "690517363714",
             appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
-        const appId = 'godeok-ms-final-v4'; // 데이터 일관성을 위해 고유한 ID 사용
+        // 앱 아이디 고정 (v4로 유지하여 데이터 연속성 보장)
+        const appId = 'godeok-ms-final-v4'; 
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -212,26 +213,30 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [인증 강화] 구글 로그인이 확인될 때까지 절대 로딩을 풀지 않음
+            // [인증 강화 핵심] 새로고침 시 구글 세션이 복구될 때까지 모든 데이터 접근을 막습니다.
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
+                        
+                        // onAuthStateChanged는 기존 구글 세션 정보를 브라우저 쿠키에서 찾아올 때까지 기다려줍니다.
                         onAuthStateChanged(auth, async (u) => {
                             if (u) {
+                                // 기존 계정(구글 혹은 이전 익명) 세션 복구 성공
                                 setUser(u);
                                 setIsAuthChecking(false);
                             } else {
-                                // 세션이 아예 없는 신규 유저라면 그때만 익명 로그인
+                                // 세션이 아예 없음 -> 신규 유저로 판단하여 익명 로그인 진행
                                 try {
                                     const anon = await signInAnonymously(auth);
                                     setUser(anon.user);
-                                } catch(e) {}
+                                } catch(e) { console.error("Login fail:", e); }
                                 setIsAuthChecking(false);
                             }
                         });
                     } catch (err) { 
+                        console.error("Auth init error:", err); 
                         setIsAuthChecking(false);
                     }
                 };
@@ -256,9 +261,10 @@
                 } catch (err) { console.error(err); } 
             };
 
-            // 데이터 실시간 동기화
+            // 데이터 로딩 (인증이 완료된 후에만 시작)
             useEffect(() => {
                 if (!user || !db || isAuthChecking) return;
+                
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
                 const unsubscribes = colNames.map(name => {
@@ -275,7 +281,11 @@
                         } else if (name === 'weekly') setWeekly(data);
                         else if (name === 'events') setEvents(data);
                         else if (name === 'overrides') setOverrides(data);
+                        
                         setIsInitialLoading(false);
+                    }, (err) => { 
+                        console.error(`Load Error (${name}):`, err); 
+                        setIsInitialLoading(false); 
                     });
                 });
                 return () => unsubscribes.forEach(un => un());
@@ -283,25 +293,22 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [수동 저장 기능] 모든 현재 상태를 서버에 강제 동기화
+            // [수동 저장 기능] 현재 로컬 상태를 서버에 강제 덮어쓰기
             const saveAllToCloud = async () => {
                 if (!user || !db) return;
                 setIsSaving(true);
                 try {
                     const batch = writeBatch(db);
-                    // 1. 학급 정보 업데이트
-                    classes.forEach(c => {
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), c);
-                    });
-                    // 2. 시간표 수정 내역 저장
-                    overrides.forEach(o => {
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o);
-                    });
+                    // 현재 브라우저에 떠있는 모든 중요한 데이터를 서버로 전송
+                    classes.forEach(c => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), c); });
+                    overrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
+                    events.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
+                    
                     await batch.commit();
-                    setTimeout(() => setIsSaving(false), 2000);
+                    setTimeout(() => setIsSaving(false), 1500); // 저장 성공 표시용
                 } catch (e) {
                     setIsSaving(false);
-                    setModalMsg("저장 실패: " + e.message);
+                    setModalMsg("서버 저장 실패: " + e.message);
                 }
             };
 
@@ -312,18 +319,15 @@
                         e.preventDefault();
                         saveAllToCloud();
                     }
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-                        e.preventDefault();
-                        undo();
-                    }
                 };
                 window.addEventListener('keydown', handleSaveShortcut);
                 return () => window.removeEventListener('keydown', handleSaveShortcut);
-            }, [classes, overrides, user]);
+            }, [classes, overrides, events, user]);
 
+            // [모달 수정] 초기화 작업 후 모달을 즉시 닫습니다.
             const handleFullReset = async () => {
                 if (!user || !db) return;
-                setConfirmModal(null); // 모달 창 즉시 닫기
+                setConfirmModal(null); // 진행하기 누르면 즉시 닫음
                 setIsInitialLoading(true);
                 try {
                     const batch = writeBatch(db);
@@ -335,13 +339,13 @@
                     const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
                     classSnap.docs.forEach(d => batch.delete(d.ref));
                     await batch.commit();
-                    setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
+                    setModalMsg("전체 데이터가 초기화되었습니다.");
                 } catch (e) { console.error(e); }
             };
 
             const handleLessonReset = async () => {
                 if (!user || !db) return;
-                setConfirmModal(null); // 모달 창 즉시 닫기
+                setConfirmModal(null); // 진행하기 누르면 즉시 닫음
                 setIsInitialLoading(true);
                 try {
                     const batch = writeBatch(db);
@@ -354,7 +358,7 @@
                         });
                     });
                     await batch.commit();
-                    setModalMsg("시간표 배치와 진도가 원상복구되었습니다.");
+                    setModalMsg("진도 내용 및 시간표 배치가 원상복구되었습니다.");
                 } catch (e) { console.error(e); }
             };
 
@@ -449,7 +453,7 @@
                         Array.from(foundClasses).sort().forEach((name, i) => {
                             const id = `c-${i}`; batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
                         });
-                        await batch.commit(); setModalMsg("시간표 업로드 완료!");
+                        await batch.commit(); setModalMsg("시간표 업로드 성공!");
                     } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
                 };
                 reader.readAsBinaryString(file); e.target.value = "";
@@ -581,7 +585,7 @@
                         batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() });
                     });
                     await batch.commit();
-                } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
+                } catch (err) { console.error("Edit Fail:", err); setModalMsg("변경사항 저장 중 오류가 발생했습니다."); }
             };
 
             const handleDrop = async (e, targetDate, targetPeriod) => {
@@ -598,26 +602,29 @@
                 if (!user || !db || !selectedClassId) return;
                 const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
-                setModalMsg("기록이 구글 서버에 저장되었습니다.");
+                setModalMsg("기록이 구글 서버에 안전하게 저장되었습니다.");
             };
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">로그인 정보 복구 중 (기존 데이터 보호 중)...</p> </div> ); }
+            // [로딩 화면] 인증 대기 중에는 아무것도 보여주지 않습니다.
+            if (isAuthChecking) { 
+                return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">선생님의 구글 세션을 복구하고 있습니다...</p> </div> ); 
+            }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
                     {modalMsg && <MessageBox message={modalMsg} onClose={() => setModalMsg("")} />}
                     {confirmModal && <ConfirmModal {...confirmModal} />}
-                    {isSaving && <div className="save-indicator"><Icon name="cloud-upload" size={16}/> 구글 서버에 저장 완료 (Ctrl+S)</div>}
+                    {isSaving && <div className="save-indicator"><Icon name="cloud-upload" size={16}/> 구글 서버와 완벽하게 동기화됨 (Ctrl+S)</div>}
 
                     {/* 사이드바 */}
                     <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
                         <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
-                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
+                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">ID: {user.uid.slice(0, 8)}...</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
                         
                         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
-                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그 순서 변경)</p> 
+                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록</p> 
                             {classes.length > 0 ? classes.map((c, index) => ( 
                                 <div key={c.id} draggable={true} onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
@@ -625,7 +632,7 @@
                                         <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
                                     </button>
                                 </div> 
-                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic text-center">로그인 후 데이터를 관리하세요.</p> </div> )} 
+                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic text-center">로그인 후 데이터를 불러오세요.</p> </div> )} 
                         </div>
 
                         {user && !user.isAnonymous && ( 
@@ -637,8 +644,8 @@
                                 
                                 <div className="h-px bg-slate-100 my-2"></div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 및 시간표 복구", message: "수정했던 모든 시간표와 진도를 원본으로 되돌릴까요?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 전체 리셋", message: "모든 시간표와 기록을 완전히 삭제할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>학기 전체 리셋</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 및 시간표 원상복구", message: "메모와 진도를 삭제하고, 수정했던 시간표 배치들을\n업로드했던 원본 상태로 모두 되돌리시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 전체 초기화", message: "모든 시간표와 기록을 완전히 삭제할까요?\n이 작업은 되돌릴 수 없습니다.", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>학기 전체 리셋</Button>
                             </div> 
                         )}
                     </div>
@@ -662,14 +669,11 @@
                         </header>
 
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <h2 className="text-2xl font-black text-slate-800">프라이빗 관리 모드</h2> <Button variant="primary" className="px-12 py-4" onClick={handleGoogleLogin}>로그인 시작</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 호출 중...</p></div> ) : (
+                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <h2 className="text-2xl font-black text-slate-800">프라이빗 관리 모드</h2> <Button variant="primary" className="px-12 py-4 shadow-xl" onClick={handleGoogleLogin}>로그인하여 시작</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">선생님의 데이터를 불러오고 있습니다...</p></div> ) : (
                                 <div className="max-w-[1600px] mx-auto space-y-6">
                                     <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
                                         <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> 
-                                            <div>
-                                                <h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2>
-                                                <p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경하고 <b>Ctrl+S</b>를 눌러 저장하세요.</p>
-                                            </div> 
+                                            <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경하고 <b>Ctrl+S</b>를 눌러 선생님 계정에 저장하세요.</p></div> 
                                             <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> 
                                                 <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> 
                                                 <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> 

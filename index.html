@@ -71,6 +71,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         
+        // 고정된 ID 우선 사용 (코드 업데이트 시에도 데이터 유지 확률 높임)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
@@ -208,22 +209,44 @@
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
+                        
+                        // 1. 커스텀 토큰이 있는 경우 최우선 처리
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             try {
                                 await signInWithCustomToken(auth, __initial_auth_token);
-                            } catch (tokenErr) {
-                                await signInAnonymously(auth);
-                            }
-                        } else {
-                            await signInAnonymously(auth);
+                                return; 
+                            } catch (e) {}
                         }
-                    } catch (err) { console.error("Auth init error:", err); }
-                    finally { setIsAuthChecking(false); }
+                        
+                        // 2. 기존 세션 복구 대기 (새로고침 시 자동 로그인 보장)
+                        // Firebase의 persistence가 복구될 때까지 아주 짧게 대기합니다.
+                        let checkCount = 0;
+                        const checkAuth = setInterval(async () => {
+                            if (auth.currentUser) {
+                                clearInterval(checkAuth);
+                                setIsAuthChecking(false);
+                            } else if (checkCount > 5) { // 약 0.5초 대기 후 없으면 익명 로그인
+                                clearInterval(checkAuth);
+                                try { await signInAnonymously(auth); } catch(e) {}
+                                setIsAuthChecking(false);
+                            }
+                            checkCount++;
+                        }, 100);
+
+                    } catch (err) { 
+                        console.error("Auth init error:", err); 
+                        setIsAuthChecking(false);
+                    }
                 };
                 initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setUser(u);
-                    if (!u) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
+                    if (u) {
+                        setUser(u);
+                    } else {
+                        // 사용자가 완전히 로그아웃된 경우에만 데이터 초기화
+                        setUser(null);
+                        setClasses([]); setWeekly([]); setEvents([]); setOverrides([]);
+                    }
                 });
                 return () => unsubscribe();
             }, []);
@@ -260,7 +283,10 @@
                         else if (name === 'events') setEvents(data);
                         else if (name === 'overrides') setOverrides(data);
                         setIsInitialLoading(false);
-                    }, (err) => { console.error("Firestore Error:", err); setIsInitialLoading(false); });
+                    }, (err) => { 
+                        console.error("Firestore Error:", err); 
+                        setIsInitialLoading(false); 
+                    });
                 });
                 return () => unsubscribes.forEach(un => un());
             }, [user]);
@@ -545,19 +571,14 @@
                 setCellDraftLabel(item?.customLabel || "");
             };
 
-            // [수정 핵심] 입력창이 즉시 닫히도록 상태 업데이트 순서 조정
             const saveCellEdit = async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
                 
-                // 1. 히스토리 기록
                 pushHistory(); 
-
-                // 2. 현재 상태값 복사 (비동기 처리 중 상태 변화 대비)
                 const currentSelected = [...selectedCells];
                 const classToSave = cellDraftClass;
                 const labelToSave = cellDraftLabel;
 
-                // 3. UI를 먼저 닫아서 즉각적인 반응 제공
                 setEditingCell(null);
                 setSelectedCells([]);
 
@@ -577,7 +598,7 @@
                     await batch.commit();
                 } catch (err) { 
                     console.error("저장 실패:", err); 
-                    setModalMsg("데이터 저장 중 오류가 발생했습니다. 다시 시도해 주세요.");
+                    setModalMsg("데이터 저장 중 오류가 발생했습니다.");
                 }
             };
 
@@ -599,20 +620,12 @@
                 if (!user || !db || !selectedClassId) return;
                 const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
-                setModalMsg("기록 저장 완료!");
-            };
-
-            const toggleManualPeriod = (p) => {
-                if (p === "전교시") { setManualPeriods(["전교시"]); } else {
-                    let next = manualPeriods.filter(v => v !== "전교시");
-                    if (next.includes(p)) { next = next.filter(v => v !== p); if (next.length === 0) next = ["전교시"]; } else { next.push(p); }
-                    setManualPeriods(next.sort());
-                }
+                setModalMsg("클라우드 저장 완료!");
             };
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 처리 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">로그인 세션 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
@@ -633,7 +646,7 @@
                                     onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }}
                                     onDragOver={(e) => e.preventDefault()}
                                     onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }}
-                                    className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 cursor-grab active:cursor-grabbing ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`}
+                                    className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`}
                                 >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
                                         <div className="flex flex-col">

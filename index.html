@@ -93,7 +93,11 @@
         };
 
         const MessageBox = ({ message, onClose }) => (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center">
+            <div 
+                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center focus:outline-none" 
+                onKeyDown={(e) => { if (e.key === 'Enter') onClose(); }} 
+                tabIndex="0"
+            >
                 <Card className="max-w-md w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 mb-4"><Icon name="info" className="text-sky-500" /></div>
                     <p className="text-slate-600 font-bold mb-6 whitespace-pre-wrap text-sm leading-relaxed">{message}</p>
@@ -103,7 +107,11 @@
         );
 
         const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center">
+            <div 
+                className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center focus:outline-none"
+                onKeyDown={(e) => { if (e.key === 'Enter') onConfirm(); else if (e.key === 'Escape') onCancel(); }}
+                tabIndex="0"
+            >
                 <Card className="max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl border-rose-100">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 mb-4"><Icon name="alert-triangle" className="text-rose-500" /></div>
                     <h3 className="text-lg font-black text-slate-800 mb-2">{title}</h3>
@@ -358,6 +366,55 @@
                 } catch (err) { console.error(err); }
             }, [history, user, db]);
 
+            const getScheduleForDate = useCallback((date) => {
+                const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
+                if (!WEEKDAYS_MAP.includes(dayName)) return [];
+                const dayEvents = events.filter(e => e.date === iso);
+                const dailyOverrides = overrides.filter(o => o.date === iso);
+                const baseWeek = weekly.filter(w => w.weekday === dayName);
+                return PERIODS.map(period => {
+                    const override = dailyOverrides.find(o => o.newPeriod === period);
+                    const base = baseWeek.find(w => w.period === period);
+                    let className = EMPTY_SLOT; let source = "none"; let customLabel = ""; let isClassChanged = false;
+                    if (override) { className = override.newClassName; customLabel = override.customLabel; source = "override"; isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT)); }
+                    else if (base) { className = base.className; source = "base"; }
+                    const grade = getGrade(className);
+                    const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
+                    const isChangche = relevantEvent?.title?.includes("창체");
+                    const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
+                    return { period, className, source, customLabel, isClassChanged, isChangche, eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type, isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent };
+                });
+            }, [events, overrides, weekly]);
+
+            // [추가 기능 1] 선택된 셀 삭제 로직
+            const handleDeleteSelected = useCallback(async () => {
+                if (!user || selectedCells.length === 0 || !db) return;
+                pushHistory();
+                try {
+                    const batch = writeBatch(db);
+                    selectedCells.forEach(cell => {
+                        const { date, period } = cell;
+                        const dObj = getSafeDate(date);
+                        const currentDataList = getScheduleForDate(dObj);
+                        const item = currentDataList.find(d => d.period === period);
+
+                        // 1. 이벤트 삭제 (행사, 시험, 휴일 등)
+                        if (item?.eventId) {
+                            batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId));
+                        }
+
+                        // 2. 시간표 덮어쓰기 해제 (수업 없음으로 변경)
+                        const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
+                        const id = existingOverride?.id || makeId("o");
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), {
+                            id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: ""
+                        });
+                    });
+                    await batch.commit();
+                    setSelectedCells([]);
+                } catch (err) { console.error(err); }
+            }, [user, db, selectedCells, overrides, pushHistory, getScheduleForDate]);
+
             useEffect(() => {
                 const handleGlobalKeyDown = (e) => { 
                     // Ctrl+Z: 취소
@@ -370,10 +427,14 @@
                         e.preventDefault();
                         refreshRemaining();
                     }
+                    // [추가 기능 1] Delete 키로 삭제
+                    if (e.key === 'Delete') {
+                        handleDeleteSelected();
+                    }
                 };
                 window.addEventListener('keydown', handleGlobalKeyDown);
                 return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-            }, [undo, refreshRemaining]);
+            }, [undo, refreshRemaining, handleDeleteSelected]);
 
             const handleScheduleUpload = async (e) => {
                 if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
@@ -485,26 +546,6 @@
                 } catch (err) { console.error(err); }
             };
 
-            const getScheduleForDate = (date) => {
-                const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
-                if (!WEEKDAYS_MAP.includes(dayName)) return [];
-                const dayEvents = events.filter(e => e.date === iso);
-                const dailyOverrides = overrides.filter(o => o.date === iso);
-                const baseWeek = weekly.filter(w => w.weekday === dayName);
-                return PERIODS.map(period => {
-                    const override = dailyOverrides.find(o => o.newPeriod === period);
-                    const base = baseWeek.find(w => w.period === period);
-                    let className = EMPTY_SLOT; let source = "none"; let customLabel = ""; let isClassChanged = false;
-                    if (override) { className = override.newClassName; customLabel = override.customLabel; source = "override"; isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT)); }
-                    else if (base) { className = base.className; source = "base"; }
-                    const grade = getGrade(className);
-                    const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
-                    const isChangche = relevantEvent?.title?.includes("창체");
-                    const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
-                    return { period, className, source, customLabel, isClassChanged, isChangche, eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type, isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent };
-                });
-            };
-
             const handleCellClick = (e, date, period, item) => {
                 const iso = getLocalIsoString(date); const clickedCell = { date: iso, period };
                 let newSelection = [];
@@ -610,7 +651,7 @@
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             <div className="max-w-[1600px] mx-auto space-y-6">
                                 <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경 시 자동 저장됩니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경 시 자동 저장됩니다. [Delete]로 삭제.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
                                     
                                     <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                         <div className="flex min-w-max">

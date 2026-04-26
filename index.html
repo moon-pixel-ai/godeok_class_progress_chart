@@ -71,8 +71,8 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         
-        // 고정된 ID 우선 사용 (코드 업데이트 시에도 데이터 유지 확률 높임)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
+        // [수정] 고정된 ID를 사용하여 환경 변화에도 데이터 경로가 유지되도록 함
+        const appId = 'godeok-ms-final-v1'; 
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
@@ -141,21 +141,9 @@
 
         const getColorForText = (text) => {
             if (!text || text === "미설정" || text.trim() === "") return "bg-white border-slate-100 text-slate-700";
-            const bgPalettes = [
-                "bg-blue-100 border-blue-300 text-blue-900", "bg-amber-100 border-amber-400 text-amber-900",
-                "bg-emerald-100 border-emerald-400 text-emerald-900", "bg-rose-100 border-rose-300 text-rose-900",
-                "bg-violet-100 border-violet-300 text-violet-900", "bg-cyan-100 border-cyan-400 text-cyan-900",
-                "bg-orange-100 border-orange-400 text-orange-900", "bg-lime-100 border-lime-400 text-lime-900",
-                "bg-fuchsia-100 border-fuchsia-400 text-fuchsia-900", "bg-teal-100 border-teal-400 text-teal-900",
-                "bg-sky-100 border-sky-300 text-sky-900", "bg-pink-100 border-pink-300 text-pink-900",
-                "bg-indigo-200 border-indigo-400 text-indigo-950", "bg-yellow-200 border-yellow-500 text-yellow-950",
-                "bg-green-200 border-green-500 text-green-950", "bg-red-200 border-red-400 text-red-950",
-                "bg-stone-200 border-stone-400 text-stone-900", "bg-zinc-200 border-zinc-400 text-zinc-900"
-            ];
-            let hash = 5381;
-            for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) + text.charCodeAt(i);
-            const index = Math.abs(hash) % bgPalettes.length;
-            return bgPalettes[index] + " shadow-sm";
+            const bgPalettes = [ "bg-blue-100 border-blue-300 text-blue-900", "bg-amber-100 border-amber-400 text-amber-900", "bg-emerald-100 border-emerald-400 text-emerald-900", "bg-rose-100 border-rose-300 text-rose-900", "bg-violet-100 border-violet-300 text-violet-900", "bg-cyan-100 border-cyan-400 text-cyan-900", "bg-orange-100 border-orange-400 text-orange-900", "bg-lime-100 border-lime-400 text-lime-900", "bg-fuchsia-100 border-fuchsia-400 text-fuchsia-900", "bg-teal-100 border-teal-400 text-teal-900", "bg-sky-100 border-sky-300 text-sky-900", "bg-pink-100 border-pink-300 text-pink-900", "bg-indigo-200 border-indigo-400 text-indigo-950", "bg-yellow-200 border-yellow-500 text-yellow-950", "bg-green-200 border-green-500 text-green-950", "bg-red-200 border-red-400 text-red-950", "bg-stone-200 border-stone-400 text-stone-900", "bg-zinc-200 border-zinc-400 text-zinc-900" ];
+            let hash = 5381; for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) + text.charCodeAt(i);
+            const index = Math.abs(hash) % bgPalettes.length; return bgPalettes[index] + " shadow-sm";
         };
 
         function App() {
@@ -204,51 +192,34 @@
                 return days;
             }, [weekBaseDate]);
 
+            // [수정 핵심] 새로고침 시 인증 세션 복구 로직 강화
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // 1. 커스텀 토큰이 있는 경우 최우선 처리
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            try {
-                                await signInWithCustomToken(auth, __initial_auth_token);
-                                return; 
-                            } catch (e) {}
-                        }
-                        
-                        // 2. 기존 세션 복구 대기 (새로고침 시 자동 로그인 보장)
-                        // Firebase의 persistence가 복구될 때까지 아주 짧게 대기합니다.
-                        let checkCount = 0;
-                        const checkAuth = setInterval(async () => {
-                            if (auth.currentUser) {
-                                clearInterval(checkAuth);
+                        // onAuthStateChanged를 통해 세션 복구를 먼저 대기
+                        const unsubscribe = onAuthStateChanged(auth, async (u) => {
+                            if (u) {
+                                setUser(u);
                                 setIsAuthChecking(false);
-                            } else if (checkCount > 5) { // 약 0.5초 대기 후 없으면 익명 로그인
-                                clearInterval(checkAuth);
-                                try { await signInAnonymously(auth); } catch(e) {}
+                            } else {
+                                // 기존 세션이 정말 없는 경우에만 익명 로그인 시도
+                                try {
+                                    const anonUser = await signInAnonymously(auth);
+                                    setUser(anonUser.user);
+                                } catch (e) { console.error("Anonymous sign in failed", e); }
                                 setIsAuthChecking(false);
                             }
-                            checkCount++;
-                        }, 100);
-
+                        });
+                        return () => unsubscribe();
                     } catch (err) { 
                         console.error("Auth init error:", err); 
                         setIsAuthChecking(false);
                     }
                 };
                 initAuth();
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    if (u) {
-                        setUser(u);
-                    } else {
-                        // 사용자가 완전히 로그아웃된 경우에만 데이터 초기화
-                        setUser(null);
-                        setClasses([]); setWeekly([]); setEvents([]); setOverrides([]);
-                    }
-                });
-                return () => unsubscribe();
             }, []);
 
             const handleGoogleLogin = async () => {
@@ -262,10 +233,12 @@
                 }
             };
 
-            const handleLogout = async () => { try { await signOut(auth); await signInAnonymously(auth); } catch (err) { console.error(err); } };
+            const handleLogout = async () => { try { await signOut(auth); const anon = await signInAnonymously(auth); setUser(anon.user); } catch (err) { console.error(err); } };
 
+            // [수정] 데이터 로딩 상태 관리 강화
             useEffect(() => {
                 if (!user || !db) { setIsInitialLoading(false); return; }
+                
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
                 const unsubscribes = colNames.map(name => {
@@ -282,9 +255,10 @@
                         } else if (name === 'weekly') setWeekly(data);
                         else if (name === 'events') setEvents(data);
                         else if (name === 'overrides') setOverrides(data);
+                        
                         setIsInitialLoading(false);
                     }, (err) => { 
-                        console.error("Firestore Error:", err); 
+                        console.error(`Firestore Error (${name}):`, err); 
                         setIsInitialLoading(false); 
                     });
                 });
@@ -311,32 +285,18 @@
 
                 try {
                     const batch = writeBatch(db);
-                    
                     const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
                     currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevOverrides.forEach(o => {
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o);
-                    });
-
+                    prevOverrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
                     const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
                     currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevEvents.forEach(e => {
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e);
-                    });
-
+                    prevEvents.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
                     await batch.commit();
-                } catch (err) { 
-                    console.error("Undo 복구 실패:", err); 
-                }
+                } catch (err) { console.error("Undo 복구 실패:", err); }
             }, [history, user, db]);
 
             useEffect(() => {
-                const handleGlobalKeyDown = (e) => {
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-                        e.preventDefault();
-                        undo();
-                    }
-                };
+                const handleGlobalKeyDown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); } };
                 window.addEventListener('keydown', handleGlobalKeyDown);
                 return () => window.removeEventListener('keydown', handleGlobalKeyDown);
             }, [undo]);
@@ -345,14 +305,10 @@
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const myGrade = getGrade(targetClassName);
                 const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({ ...e, dateObj: getSafeDate(e.date) })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
-                const targetExam = upcomingExams[0];
-                if (!targetExam) return 0;
-                const end = targetExam.dateObj;
-                let count = 0;
-                const d = new Date(today);
+                const targetExam = upcomingExams[0]; if (!targetExam) return 0;
+                const end = targetExam.dateObj; let count = 0; const d = new Date(today);
                 while (d < end) {
-                    const iso = getLocalIsoString(d);
-                    const dayName = WEEKDAY_BY_DAY[d.getDay()];
+                    const iso = getLocalIsoString(d); const dayName = WEEKDAY_BY_DAY[d.getDay()];
                     if (WEEKDAYS_MAP.includes(dayName)) {
                         const dailyOverrides = overrides.filter(o => o.date === iso);
                         const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
@@ -377,8 +333,7 @@
                 if (!user || !db) return;
                 const batch = writeBatch(db);
                 classes.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { remainingBeforeExam: countRemaining(c.name) }); });
-                await batch.commit();
-                setModalMsg("시수 동기화가 완료되었습니다.");
+                await batch.commit(); setModalMsg("시수 동기화가 완료되었습니다.");
             };
 
             const handleScheduleUpload = async (e) => {
@@ -393,17 +348,14 @@
                         const newWeekly = []; const foundClasses = new Set();
                         const daysInExcel = rows[0] ? rows[0].slice(1) : []; 
                         for (let i = 1; i < rows.length; i++) {
-                            const row = rows[i];
-                            const periodName = String(row[0] || "").trim();
+                            const row = rows[i]; const periodName = String(row[0] || "").trim();
                             if (!periodName.includes("교시")) continue;
                             for (let j = 1; j < row.length; j++) {
                                 let className = String(row[j] || "").trim();
                                 if (!className || className === "-") continue;
-                                const dayName = daysInExcel[j - 1];
-                                if (!WEEKDAYS_MAP.includes(dayName)) continue;
+                                const dayName = daysInExcel[j - 1]; if (!WEEKDAYS_MAP.includes(dayName)) continue;
                                 if (className.includes("-") && !className.includes("학년")) { const pts = className.split("-"); className = `${pts[0]}학년 ${pts[1]}반`; }
-                                foundClasses.add(className);
-                                newWeekly.push({ className, weekday: dayName, period: periodName });
+                                foundClasses.add(className); newWeekly.push({ className, weekday: dayName, period: periodName });
                             }
                         }
                         const batch = writeBatch(db);
@@ -415,15 +367,12 @@
                         oldOverrides.docs.forEach(d => batch.delete(d.ref));
                         newWeekly.forEach(w => { const id = makeId("w"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'weekly', id), w); });
                         Array.from(foundClasses).sort().forEach((name, i) => {
-                            const id = `c-${i}`;
-                            batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
+                            const id = `c-${i}`; batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
                         });
-                        await batch.commit();
-                        setModalMsg("시간표 업로드 완료!");
+                        await batch.commit(); setModalMsg("시간표 업로드 완료!");
                     } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
                 };
-                reader.readAsBinaryString(file);
-                e.target.value = "";
+                reader.readAsBinaryString(file); e.target.value = "";
             };
 
             const handleEventUpload = async (e) => {
@@ -448,8 +397,7 @@
                             }
                             if (!found) return;
                             for (let r = 0; r < rows.length; r++) {
-                                const row = rows[r];
-                                for (let c = 0; c < row.length; c++) {
+                                const row = rows[r]; for (let c = 0; c < row.length; c++) {
                                     const val = row[c];
                                     if (val && !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 31) {
                                         const day = parseInt(val); let content = String(rows[r + 1]?.[c] || "").trim();
@@ -467,39 +415,29 @@
                         const oldEvents = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
                         oldEvents.docs.forEach(d => batch.delete(d.ref));
                         newEvents.forEach(e => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), e); });
-                        await batch.commit();
-                        setModalMsg("학사일정 동기화 완료!");
+                        await batch.commit(); setModalMsg("학사일정 동기화 완료!");
                     } catch (err) { setModalMsg("파일 읽기 오류!"); }
                 };
-                reader.readAsBinaryString(file);
-                e.target.value = "";
+                reader.readAsBinaryString(file); e.target.value = "";
             };
 
             const handleAddManualEvent = async () => {
                 if (!user || !db) return setModalMsg("로그인이 필요합니다.");
                 if (!manualDate || !manualTitle.trim()) return;
-                pushHistory();
-                const batch = writeBatch(db);
-                manualPeriods.forEach(p => { 
-                    const id = makeId("e"); 
-                    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), { date: manualDate, type: manualType, title: manualTitle.trim(), period: p }); 
-                });
-                await batch.commit();
-                setManualTitle("");
+                pushHistory(); const batch = writeBatch(db);
+                manualPeriods.forEach(p => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), { date: manualDate, type: manualType, title: manualTitle.trim(), period: p }); });
+                await batch.commit(); setManualTitle("");
             };
 
             const handleDeleteEvent = async (id) => {
                 if (!user || !db || !id) return;
-                pushHistory();
-                try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
+                pushHistory(); try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
             };
 
             const handleClassReorder = async (fromIndex, toIndex) => {
                 if (!user || !db) return;
-                const newClasses = [...classes];
-                const [movedItem] = newClasses.splice(fromIndex, 1);
-                newClasses.splice(toIndex, 0, movedItem);
-                const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
+                const newClasses = [...classes]; const [movedItem] = newClasses.splice(fromIndex, 1);
+                newClasses.splice(toIndex, 0, movedItem); const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
                 setClasses(updatedWithOrder);
                 try {
                     const batch = writeBatch(db);
@@ -509,8 +447,7 @@
             };
 
             const getScheduleForDate = (date) => {
-                const iso = getLocalIsoString(date);
-                const dayName = WEEKDAY_BY_DAY[date.getDay()];
+                const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
                 if (!WEEKDAYS_MAP.includes(dayName)) return [];
                 const dayEvents = events.filter(e => e.date === iso);
                 const dailyOverrides = overrides.filter(o => o.date === iso);
@@ -518,101 +455,62 @@
                 return PERIODS.map(period => {
                     const override = dailyOverrides.find(o => o.newPeriod === period);
                     const base = baseWeek.find(w => w.period === period);
-                    let className = EMPTY_SLOT;
-                    let source = "none";
-                    let customLabel = "";
-                    let isClassChanged = false;
-                    if (override) {
-                        className = override.newClassName;
-                        customLabel = override.customLabel;
-                        source = "override";
-                        isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT));
-                    } else if (base) {
-                        className = base.className;
-                        source = "base";
-                    }
+                    let className = EMPTY_SLOT; let source = "none"; let customLabel = ""; let isClassChanged = false;
+                    if (override) { className = override.newClassName; customLabel = override.customLabel; source = "override"; isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT)); }
+                    else if (base) { className = base.className; source = "base"; }
                     const grade = getGrade(className);
                     const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
                     const isChangche = relevantEvent?.title?.includes("창체");
                     const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
-                    return {
-                        period, className, source, customLabel, isClassChanged, isChangche,
-                        eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type,
-                        isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent
-                    };
+                    return { period, className, source, customLabel, isClassChanged, isChangche, eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type, isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent };
                 });
             };
 
             const handleCellClick = (e, date, period, item) => {
-                const iso = getLocalIsoString(date);
-                const clickedCell = { date: iso, period };
+                const iso = getLocalIsoString(date); const clickedCell = { date: iso, period };
                 let newSelection = [];
                 if (e.ctrlKey || e.metaKey) {
                     const isSelected = selectedCells.some(c => c.date === iso && c.period === period);
                     if (isSelected) { newSelection = selectedCells.filter(c => !(c.date === iso && c.period === period)); } else { newSelection = [...selectedCells, clickedCell]; }
                 } else if (e.shiftKey && selectedCells.length > 0) {
-                    const lastSelected = selectedCells[selectedCells.length - 1];
-                    const allCells = [];
+                    const lastSelected = selectedCells[selectedCells.length - 1]; const allCells = [];
                     currentWeekDays.forEach(d => { const dIso = getLocalIsoString(d); PERIODS.forEach(p => allCells.push({ date: dIso, period: p })); });
                     const startIdx = allCells.findIndex(c => c.date === lastSelected.date && c.period === lastSelected.period);
                     const endIdx = allCells.findIndex(c => c.date === iso && c.period === period);
                     if (startIdx !== -1 && endIdx !== -1) {
-                        const low = Math.min(startIdx, endIdx); const high = Math.max(startIdx, endIdx);
-                        const range = allCells.slice(low, high + 1);
-                        const selectionMap = new Map();
-                        selectedCells.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
-                        range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
-                        newSelection = Array.from(selectionMap.values());
+                        const low = Math.min(startIdx, endIdx); const high = Math.max(startIdx, endIdx); const range = allCells.slice(low, high + 1);
+                        const selectionMap = new Map(); selectedCells.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
+                        range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c)); newSelection = Array.from(selectionMap.values());
                     }
                 } else { newSelection = [clickedCell]; }
-                setSelectedCells(newSelection);
-                setEditingCell(clickedCell);
-                setCellDraftClass(item?.className || EMPTY_SLOT);
-                setCellDraftLabel(item?.customLabel || "");
+                setSelectedCells(newSelection); setEditingCell(clickedCell); setCellDraftClass(item?.className || EMPTY_SLOT); setCellDraftLabel(item?.customLabel || "");
             };
 
             const saveCellEdit = async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
-                
-                pushHistory(); 
-                const currentSelected = [...selectedCells];
-                const classToSave = cellDraftClass;
-                const labelToSave = cellDraftLabel;
-
-                setEditingCell(null);
-                setSelectedCells([]);
-
+                pushHistory(); const currentSelected = [...selectedCells]; const classToSave = cellDraftClass; const labelToSave = cellDraftLabel;
+                setEditingCell(null); setSelectedCells([]);
                 try {
                     const batch = writeBatch(db);
                     currentSelected.forEach(cell => {
-                        const { date, period } = cell;
-                        const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
+                        const { date, period } = cell; const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
                         const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
                         const preservedClass = currentItem?.className || EMPTY_SLOT;
                         const finalClass = currentSelected.length > 1 ? preservedClass : (classToSave || EMPTY_SLOT);
                         const id = existingOverride?.id || makeId("o");
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { 
-                            id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() 
-                        });
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() });
                     });
                     await batch.commit();
-                } catch (err) { 
-                    console.error("저장 실패:", err); 
-                    setModalMsg("데이터 저장 중 오류가 발생했습니다.");
-                }
+                } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
             };
 
             const handleDrop = async (e, targetDate, targetPeriod) => {
                 e.preventDefault(); setDragOverCell(null);
                 if (!user || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                
-                pushHistory();
-                const batch = writeBatch(db);
-                const targetId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
-                const sourceId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
+                pushHistory(); const batch = writeBatch(db);
+                const targetId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
+                const sourceId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
                 await batch.commit(); setDragSource(null);
             };
 
@@ -639,27 +537,16 @@
                         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
                             <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그하여 순서 변경)</p> 
                             {classes.length > 0 ? classes.map((c, index) => ( 
-                                <div 
-                                    key={c.id} 
-                                    draggable={true}
-                                    onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }}
-                                    onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }}
-                                    onDragOver={(e) => e.preventDefault()}
-                                    onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }}
-                                    className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`}
-                                >
+                                <div key={c.id} draggable={true} onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
-                                        <div className="flex flex-col">
-                                            <span>{shortClass(c.name)}</span>
-                                            <span className={`text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`}>{c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle}</span>
-                                        </div> 
+                                        <div className="flex flex-col"><span>{shortClass(c.name)}</span><span className={`text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`}>{c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle}</span></div> 
                                         <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
                                     </button>
                                 </div> 
                             )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic text-center">로그인 후 파일을 업로드하세요.</p> </div> )} 
                         </div>
 
-                        {user && ( 
+                        {user && !user.isAnonymous && ( 
                             <div className="p-6 border-t border-slate-100 space-y-3"> 
                                 <input ref={scheduleFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleScheduleUpload} /> 
                                 <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
@@ -687,43 +574,10 @@
                                                 {currentWeekDays.map((day, dIdx) => {
                                                     const data = getScheduleForDate(day); const dIso = getLocalIsoString(day);
                                                     return (<div key={day.toString()} className={`timetable-column border-r border-slate-50 ${dIdx >= 5 ? "bg-slate-50/20" : ""}`}><div className="h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm bg-white/90 backdrop-blur-md"><span className={`block text-base font-black leading-none ${day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className="text-[10px] font-bold text-slate-400 mt-1 block">{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
-                                                        const item = data.find(d => d.period === period); 
-                                                        const isEditing = editingCell?.date === dIso && editingCell?.period === period; 
-                                                        const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); 
-                                                        const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
+                                                        const item = data.find(d => d.period === period); const isEditing = editingCell?.date === dIso && editingCell?.period === period; const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
                                                         const colorClass = item?.hasAnyEvent ? (item.eventType === '시험' ? "bg-indigo-100 border-indigo-400 text-indigo-900" : "bg-rose-100 border-rose-400 text-rose-900") : getColorForText(item?.customLabel || "");
                                                         return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
-                                                            {item?.isEventMode ? (
-                                                                <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center">
-                                                                    <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button>
-                                                                    <div className="pointer-events-none">
-                                                                        <p className="text-[8px] font-black uppercase opacity-60 mb-1 leading-none">{item.eventType}</p>
-                                                                        <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p>
-                                                                    </div>
-                                                                </div>
-                                                            ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : (
-                                                                <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative">
-                                                                    {item?.hasAnyEvent && (
-                                                                        <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button>
-                                                                    )}
-                                                                    {item?.className !== EMPTY_SLOT && (
-                                                                        <span className="font-black text-sm tracking-tighter leading-none pointer-events-none">
-                                                                            {shortClass(item?.className)}
-                                                                            {item?.isClassChanged && <span className="text-[8px] text-amber-600 ml-1 font-bold">(수정)</span>}
-                                                                        </span>
-                                                                    )}
-                                                                    {item?.className === EMPTY_SLOT && item?.hasAnyEvent && (
-                                                                        <p className="text-[10px] font-black leading-tight break-all line-clamp-3 text-center pointer-events-none">{item.eventTitle}</p>
-                                                                    )}
-                                                                    {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && (
-                                                                        <span className={`text-[10px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}>
-                                                                            {item.isChangche ? '창체' : (item.eventTitle.length > 5 ? item.eventTitle.slice(0,5)+'..' : item.eventTitle)}
-                                                                        </span>
-                                                                    )}
-                                                                    {item?.customLabel && (<span className="text-[9px] font-bold mt-1 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)}
-                                                                    {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>}
-                                                                </div>
-                                                            )}</div></div>);
+                                                            {item?.isEventMode ? ( <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center"> <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> <div className="pointer-events-none"> <p className="text-[8px] font-black uppercase opacity-60 mb-1 leading-none">{item.eventType}</p> <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p> </div> </div> ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : ( <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"> {item?.hasAnyEvent && ( <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> )} {item?.className !== EMPTY_SLOT && ( <span className="font-black text-sm tracking-tighter leading-none pointer-events-none"> {shortClass(item?.className)} {item?.isClassChanged && <span className="text-[8px] text-amber-600 ml-1 font-bold">(수정)</span>} </span> )} {item?.className === EMPTY_SLOT && item?.hasAnyEvent && ( <p className="text-[10px] font-black leading-tight break-all line-clamp-3 text-center pointer-events-none">{item.eventTitle}</p> )} {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && ( <span className={`text-[10px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}> {item.isChangche ? '창체' : (item.eventTitle.length > 5 ? item.eventTitle.slice(0,5)+'..' : item.eventTitle)} </span> )} {item?.customLabel && (<span className="text-[9px] font-bold mt-1 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)} {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>} </div> )}</div></div>);
                                                     })}</div>);
                                                 })}
                                             </div>
@@ -750,24 +604,10 @@
                                             <div className="lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner">
                                                 <div className="flex flex-col gap-6">
                                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
-                                                        <div className="space-y-2">
-                                                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label>
-                                                            <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" />
-                                                        </div>
-                                                        <div className="space-y-2">
-                                                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label>
-                                                            <select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm">
-                                                                <option value="휴업">휴업 (수업제외)</option>
-                                                                <option value="시험">시험 (수업제외)</option>
-                                                                <option value="행사(수업제외)">행사 (수업제외)</option>
-                                                                <option value="행사">행사 (수업포함)</option>
-                                                            </select>
-                                                        </div>
+                                                        <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label><input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
+                                                        <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label><select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm"><option value="휴업">휴업 (수업제외)</option><option value="시험">시험 (수업제외)</option><option value="행사(수업제외)">행사 (수업제외)</option><option value="행사">행사 (수업포함)</option></select></div>
                                                     </div>
-                                                    <div className="space-y-2">
-                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label>
-                                                        <input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" />
-                                                    </div>
+                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label><input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
                                                     <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
                                                 </div>
                                             </div>
@@ -777,10 +617,7 @@
                                                     {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
                                                         events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
                                                             <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
-                                                                <div className="flex flex-col gap-1">
-                                                                    <span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span>
-                                                                    <span className="text-xs font-bold text-slate-700">{e.title}</span>
-                                                                </div>
+                                                                <div className="flex flex-col gap-1"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-xs font-bold text-slate-700">{e.title}</span></div>
                                                                 <button type="button" onClick={(ev) => { ev.stopPropagation(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash-2" size={14}/></button>
                                                             </div>
                                                         ))

@@ -231,35 +231,63 @@ useEffect(() => {
     } 
 };
 
-            // 데이터 실시간 동기화
-            useEffect(() => {
-                if (!user || !db || isAuthChecking) return;
+// [완벽 해결] 데이터 실시간 동기화 (로딩 멈춤 및 무한루프 원천 차단)
+useEffect(() => {
+    // 1. user 전체가 아닌 user.uid(고유 문자열)만 확인하여 무한루프를 차단합니다.
+    if (!user?.uid || !db || isAuthChecking) return;
+    
+    let isMounted = true;
+    let unsubscribes = [];
+    setIsInitialLoading(true);
+
+    const startSync = async () => {
+        try {
+            // 2. 파이어베이스가 멈춰버리는 고질적 버그를 해결하기 위해, 
+            // 데이터를 가져오기 직전에 최신 출입증으로 1회 강제 갱신합니다.
+            await user.getIdToken(true); 
+        } catch (error) {
+            console.warn("출입증 갱신 지연:", error);
+        }
+
+        if (!isMounted) return;
+
+        const colNames = ['classes', 'weekly', 'events', 'overrides'];
+        
+        // 3. 막혔던 문이 뚫렸으니 정상적으로 데이터를 촥! 가져옵니다.
+        unsubscribes = colNames.map(name => {
+            return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
+                if (!isMounted) return;
+                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 
-                setIsInitialLoading(true);
-                const colNames = ['classes', 'weekly', 'events', 'overrides'];
-                const unsubscribes = colNames.map(name => {
-                    return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
-                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        if (name === 'classes') {
-                            const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                            setClasses(sorted);
-                            setSelectedClassId(prevId => {
-                                if (!sorted.length) return null;
-                                if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
-                                return prevId;
-                            });
-                        } else if (name === 'weekly') setWeekly(data);
-                        else if (name === 'events') setEvents(data);
-                        else if (name === 'overrides') setOverrides(data);
-                        
-                        setIsInitialLoading(false);
-                    }, (err) => { 
-                        console.error(`Firestore Error (${name}):`, err); 
-                        setIsInitialLoading(false); 
+                if (name === 'classes') {
+                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                    setClasses(sorted);
+                    
+                    setSelectedClassId(prevId => {
+                        if (!sorted.length) return null;
+                        if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
+                        return prevId;
                     });
-                });
-                return () => unsubscribes.forEach(un => un());
-            }, [user, isAuthChecking]);
+                } else if (name === 'weekly') setWeekly(data);
+                else if (name === 'events') setEvents(data);
+                else if (name === 'overrides') setOverrides(data);
+                
+                setIsInitialLoading(false); // 데이터가 오면 로딩 뱅글뱅글 끄기!
+            }, (err) => { 
+                console.error(`Firestore 오류 (${name}):`, err);
+                setIsInitialLoading(false); 
+            });
+        });
+    };
+
+    startSync();
+
+    return () => {
+        isMounted = false;
+        unsubscribes.forEach(un => un());
+    };
+// ★ 핵심 해결포인트: 배열 안에 user 대신 user?.uid 를 넣어서 무한 쳇바퀴를 끊어버렸습니다!
+}, [user?.uid, isAuthChecking, db]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

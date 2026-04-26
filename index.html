@@ -192,24 +192,25 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] 새로고침 시 인증 복구 로직 - 세션 복구 대기 후 익명 로그인 처리
+            // [핵심 해결] 새로고침 시 세션 복구를 완벽히 기다리는 로직
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // onAuthStateChanged는 기존 구글 세션이 있는지 확인될 때까지 기다려줍니다.
+                        // 구글/익명 세션이 있는지 확인될 때까지 UI를 아예 보여주지 않습니다.
                         onAuthStateChanged(auth, async (u) => {
                             if (u) {
+                                // 세션 복구 성공
                                 setUser(u);
                                 setIsAuthChecking(false);
                             } else {
-                                // 세션 확인이 완벽히 끝났는데 구글 유저가 없는 경우에만 익명 로그인 진행
+                                // 세션이 아예 없음 -> 신규 익명 계정 생성
                                 try {
                                     const anon = await signInAnonymously(auth);
                                     setUser(anon.user);
-                                } catch(e) { console.error(e); }
+                                } catch(e) { console.error("Anonymous fail:", e); }
                                 setIsAuthChecking(false);
                             }
                         });
@@ -272,10 +273,12 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [수정 핵심] 데이터 초기화 로직 및 모달 닫기 수정
+            // [모달 버그 및 기능 복구] 초기화 로직
             const handleFullReset = async () => {
                 if (!user || !db) return;
                 try {
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setIsInitialLoading(true);
                     const batch = writeBatch(db);
                     const targets = ['weekly', 'events', 'overrides'];
                     for (const name of targets) {
@@ -286,7 +289,6 @@
                     classSnap.docs.forEach(d => batch.delete(d.ref));
                     
                     await batch.commit();
-                    setConfirmModal(null); // 모달 즉시 닫기
                     setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
                 } catch (e) { console.error(e); }
             };
@@ -294,8 +296,10 @@
             const handleLessonReset = async () => {
                 if (!user || !db) return;
                 try {
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setIsInitialLoading(true);
                     const batch = writeBatch(db);
-                    // 1. 수업 변경 기록(overrides) 전체 삭제 -> 시간표 원상복구
+                    // 1. 수업 변경 기록(overrides) 전체 삭제 -> 시간표를 엑셀 업로드 원본으로 복구
                     const overrideSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
                     overrideSnap.docs.forEach(d => batch.delete(d.ref));
                     
@@ -307,8 +311,7 @@
                         });
                     });
                     await batch.commit();
-                    setConfirmModal(null); // 모달 즉시 닫기
-                    setModalMsg("시간표 수정 기록과 학급별 진도가 원상복구되었습니다.");
+                    setModalMsg("시간표 배치와 학급별 진도가 원본 상태로 복구되었습니다.");
                 } catch (e) { console.error(e); }
             };
 
@@ -563,13 +566,14 @@
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">로그인 정보 복구 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 및 정보 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
                     {modalMsg && <MessageBox message={modalMsg} onClose={() => setModalMsg("")} />}
                     {confirmModal && <ConfirmModal {...confirmModal} />}
 
+                    {/* 사이드바 */}
                     <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
                         <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
                         <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
@@ -595,8 +599,8 @@
                                 
                                 <div className="h-px bg-slate-100 my-2"></div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 내용 및 시간표 복구", message: "모든 학급의 진도명, 메모를 삭제하고\n수정했던 시간표 배치를 원상복구하시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 시간표 완전 리셋", message: "모든 시간표, 학사일정, 진도 기록이 삭제됩니다.\n새 학기를 시작할 때만 사용하세요. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>시간표 전체 리셋</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "진도 내용 및 시간표 복구", message: "모든 학급의 진도명, 메모를 삭제하고\n수정했던 시간표 배치를 원본 상태로 돌리시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 전체 초기화", message: "모든 시간표, 학사일정, 기록이 완전히 삭제됩니다.\n이 작업은 취소할 수 없습니다. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>학기 전체 리셋</Button>
                             </div> 
                         )}
                     </div>
@@ -604,14 +608,14 @@
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
                             <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
-                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연동됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 저장소 연결됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
                         </header>
 
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
+                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">선생님 전용 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
                                 <div className="max-w-[1600px] mx-auto space-y-6">
                                     <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                        <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">배치를 변경하면 (수정) 라벨이 표시됩니다. 가로로 스크롤하여 다음 주 일정을 확인하세요.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                        <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경된 수업은 (수정) 라벨이 붙습니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
                                         
                                         <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                             <div className="flex min-w-max">
@@ -629,20 +633,22 @@
                                         </div>
                                     </Card>
 
+                                    {/* 상세 기록 */}
                                     {selectedClass && ( 
                                         <Card className="p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"> 
-                                            <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">상세 진도 기록</h2></div> 
+                                            <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">학급별 상세 진도 기록</h2></div> 
                                             <div className="grid lg:grid-cols-2 gap-10"> 
                                                 <div className="space-y-5"> 
                                                     <div className="bg-slate-50 p-5 rounded-[24px] border border-slate-100 shadow-inner"><div className="flex items-center justify-between"><div className="flex flex-col"><p className="text-[9px] font-black text-slate-400 mb-1 uppercase">선택 학급</p><span className="text-2xl font-black text-slate-800">{shortClass(selectedClass.name)}</span></div><div className="flex flex-col items-end"><span className="text-[10px] font-bold text-slate-400 mb-1">시험까지 남은 수업</span><span className="bg-sky-500 px-3 py-1 rounded-full text-[11px] font-black text-white shadow-lg">{selectedClass.remainingBeforeExam}회</span></div></div></div> 
-                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
+                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">현재 진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
                                                 </div> 
-                                                <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
+                                                <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 특이사항 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
                                             </div> 
                                             <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>기록 저장하기</Button></div> 
                                         </Card> 
                                     )}
 
+                                    {/* 학사 일정 관리 */}
                                     <Card className="p-8 shadow-xl shadow-slate-200/40"> 
                                         <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 관리</h2></div> 
                                         <div className="grid lg:grid-cols-3 gap-8">
@@ -652,12 +658,12 @@
                                                         <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label><input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
                                                         <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label><select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm"><option value="휴업">휴업 (수업제외)</option><option value="시험">시험 (수업제외)</option><option value="행사(수업제외)">행사 (수업제외)</option><option value="행사">행사 (수업포함)</option></select></div>
                                                     </div>
-                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label><input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
+                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label><input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 재량휴업" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
                                                     <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
                                                 </div>
                                             </div>
                                             <div className="lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden">
-                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 현재 표시 주간 일정</p>
+                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 주간 학사 일정 리스트</p>
                                                 <div className="flex-1 overflow-y-auto custom-scrollbar">
                                                     {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
                                                         events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (

@@ -47,21 +47,23 @@
 
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-        // --- 전역 설정 및 초기화 ---
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
-            authDomain: "moon-pixel.firebaseapp.com",
-            projectId: "moon-pixel",
-            storageBucket: "moon-pixel.firebasestorage.app",
-            messagingSenderId: "690517363714",
-            appId: "1:690517363714:web:a5204517fcc83982942b1b"
-        };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-v3';
+// --- 전역 설정 및 초기화 (확실한 고정값) ---
+const firebaseConfig = {
+    apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
+    authDomain: "moon-pixel.firebaseapp.com",
+    projectId: "moon-pixel",
+    storageBucket: "moon-pixel.firebasestorage.app",
+    messagingSenderId: "690517363714",
+    appId: "1:690517363714:web:a5204517fcc83982942b1b",
+    measurementId: "G-V5C04W4EG3"
+};
+const appId = 'godeok-ms-final-v3';
+
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -192,25 +194,23 @@
                 return days;
             }, [weekBaseDate]);
 
-// [최종 해결본] 복잡한 강제 세팅을 없애고, 순수하게 로그인 상태만 감지합니다!
+            // [완벽 해결] 임시 계정을 만들지 않고 오직 구글 로그인만 기다립니다.
 useEffect(() => {
     setIsAuthChecking(true);
     
-    // 구글 성지기에게 "주인님 들어오시는지만 잘 봐!"라고 감시카메라만 달아둡니다.
+    // 구글 성지기가 선생님을 기억하는지 확인합니다.
     const unsubscribe = onAuthStateChanged(auth, (u) => {
         if (u) {
-            // 구글 로그인된 진짜 주인이 맞으면 문 열어줌!
-            setUser(u);
+            setUser(u); // 1. 구글 로그인이 확인되면 주인으로 모십니다.
         } else {
-            // 아무도 안 들어왔으면 빈 자리로 대기!
-            setUser(null);
+            setUser(null); // 2. 안 되어있으면 가짜 계정 만들지 말고 빈칸으로 둡니다!
         }
-        // 확인이 1초 만에 끝났으니 로딩 화면(뱅글뱅글) 바로 끄기!
-        setIsAuthChecking(false);
+        setIsAuthChecking(false); // 3. 로딩 화면(뱅글뱅글) 끄기
     });
 
     return () => unsubscribe();
 }, []);
+
             const handleGoogleLogin = async () => {
                 const provider = new GoogleAuthProvider();
                 try {
@@ -222,61 +222,44 @@ useEffect(() => {
                 }
             };
 
-const handleLogout = async () => { 
+           const handleLogout = async () => { 
     try { 
         await signOut(auth);
-        setUser(null); // 그냥 깨끗하게 로그아웃만 합니다.
-    } catch (err) { console.error("로그아웃 실패:", err); } 
+        setUser(null); // 익명 계정 없이 그냥 깨끗하게 로그아웃만 합니다.
+    } catch (err) { 
+        console.error("로그아웃 에러:", err);
+    } 
 };
-            // 데이터 실시간 동기화 (무한루프 완벽 차단 및 로딩 개선 버전)
-useEffect(() => {
-    if (!user || !db || isAuthChecking) return;
 
-    let isMounted = true;
-    const unsubscribes = [];
-
-    // 1. 무한루프 주범(getIdToken) 완전 삭제! 바로 데이터 요청 시작
-    setIsInitialLoading(true);
-    let loadedCount = 0;
-    const colNames = ['classes', 'weekly', 'events', 'overrides'];
-    
-    colNames.forEach(name => {
-        const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
-            if (!isMounted) return;
-            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-            if (name === 'classes') {
-                const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                setClasses(sorted);
-                setSelectedClassId(prevId => {
-                    if (!sorted.length) return null;
-                    if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
-                    return prevId;
+            // 데이터 실시간 동기화
+            useEffect(() => {
+                if (!user || !db || isAuthChecking) return;
+                
+                setIsInitialLoading(true);
+                const colNames = ['classes', 'weekly', 'events', 'overrides'];
+                const unsubscribes = colNames.map(name => {
+                    return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        if (name === 'classes') {
+                            const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                            setClasses(sorted);
+                            setSelectedClassId(prevId => {
+                                if (!sorted.length) return null;
+                                if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
+                                return prevId;
+                            });
+                        } else if (name === 'weekly') setWeekly(data);
+                        else if (name === 'events') setEvents(data);
+                        else if (name === 'overrides') setOverrides(data);
+                        
+                        setIsInitialLoading(false);
+                    }, (err) => { 
+                        console.error(`Firestore Error (${name}):`, err); 
+                        setIsInitialLoading(false); 
+                    });
                 });
-            } else if (name === 'weekly') setWeekly(data);
-            else if (name === 'events') setEvents(data);
-            else if (name === 'overrides') setOverrides(data);
-
-            // 2. 창고 문 4개가 다 열리면 로딩 화면(뱅글뱅글) 끄기!
-            loadedCount++;
-            if (loadedCount >= colNames.length) {
-                setIsInitialLoading(false);
-            }
-        }, (err) => {
-            console.error(`창고 권한 오류 (${name}):`, err);
-            if (!isMounted) return;
-            loadedCount++;
-            if (loadedCount >= colNames.length) setIsInitialLoading(false);
-        });
-        unsubscribes.push(un);
-    });
-
-    return () => {
-        isMounted = false;
-        unsubscribes.forEach(un => un());
-    };
-// ★ 3. 핵심: user 객체 전체가 아니라 'user.uid(고유아이디)'만 감시해서 불필요한 새로고침 차단!
-}, [user?.uid, isAuthChecking, db]);
+                return () => unsubscribes.forEach(un => un());
+            }, [user, isAuthChecking]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

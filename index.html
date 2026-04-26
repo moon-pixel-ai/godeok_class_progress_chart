@@ -61,7 +61,8 @@
             messagingSenderId: "690517363714",
             appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-stable';
+        // 고정된 appId를 사용하여 데이터 경로의 일관성을 보장합니다.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-standard';
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -191,40 +192,41 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] React + Firebase 표준 패턴 (새로고침 시 리셋 방지)
+            // [수정 핵심] 새로고침 시 리셋 문제 해결을 위한 인증 세션 복구 로직 강화
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
-                        // 세션 유지 설정
+                        // 세션 지속성 설정 (로컬 스토리지에 로그인 정보 저장)
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // 1단계: 토큰 기반 로그인 시도
+                        // Canvas 환경의 커스텀 토큰이 있다면 우선 로그인
                         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                             await signInWithCustomToken(auth, __initial_auth_token);
-                        } 
-                        // 구글 세션 복구는 onAuthStateChanged가 처리하도록 비워둡니다.
+                        }
+
+                        // onAuthStateChanged는 기존 세션이 있는지 확인될 때까지 기다려줍니다.
+                        const unsubscribe = onAuthStateChanged(auth, async (u) => {
+                            if (u) {
+                                // 기존 로그인(구글 포함) 세션이 발견되면 해당 유저로 설정
+                                setUser(u);
+                                setIsAuthChecking(false);
+                            } else {
+                                // 세션 확인이 끝났는데 유저가 없다면 그때서야 익명 로그인 진행
+                                try {
+                                    const anon = await signInAnonymously(auth);
+                                    setUser(anon.user);
+                                } catch(e) { console.error("Anonymous login failed:", e); }
+                                setIsAuthChecking(false);
+                            }
+                        });
+                        return () => unsubscribe();
                     } catch (err) { 
                         console.error("Auth init error:", err); 
+                        setIsAuthChecking(false);
                     }
                 };
-                
                 initAuth();
-
-                const unsubscribe = onAuthStateChanged(auth, async (u) => {
-                    if (u) {
-                        setUser(u);
-                        setIsAuthChecking(false);
-                    } else {
-                        // 세션 복구 시도가 실패한 경우에만 익명 로그인 수행
-                        try {
-                            const anon = await signInAnonymously(auth);
-                            setUser(anon.user);
-                        } catch(e) { console.error(e); }
-                        setIsAuthChecking(false);
-                    }
-                });
-                return () => unsubscribe();
             }, []);
 
             const handleGoogleLogin = async () => {
@@ -241,13 +243,13 @@
             const handleLogout = async () => { 
                 try { 
                     await signOut(auth); 
-                    // 로그아웃 즉시 새 익명 계정으로 전환 (필수 데이터 초기화 방지)
+                    // 로그아웃 시 즉시 익명으로 전환하여 빈 판을 보여줌
                     const anon = await signInAnonymously(auth);
                     setUser(anon.user);
                 } catch (err) { console.error(err); } 
             };
 
-            // 데이터 실시간 동기화 (userId가 안정화된 후 실행)
+            // 데이터 실시간 동기화 (Auth 확인이 완벽히 끝난 후 실행)
             useEffect(() => {
                 if (!user || !db || isAuthChecking) return;
                 
@@ -535,7 +537,7 @@
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 복구 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">로그인 정보 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">

@@ -4,11 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>고덕중 개인별 학사 진도 관리 시스템</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com/"></script>
+    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
     <style>
@@ -262,7 +267,6 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [핵심 수정] 히스토리 저장 로직 강화
             const pushHistory = useCallback(() => {
                 setHistory(prev => [...prev, { 
                     overrides: JSON.parse(JSON.stringify(overrides)), 
@@ -270,7 +274,6 @@
                 }].slice(-30));
             }, [overrides, events]);
 
-            // [핵심 수정] 롤백 로직 강화 (Batch Delete & Restore)
             const undo = useCallback(async () => {
                 if (history.length === 0 || !user || !db) return;
                 
@@ -283,14 +286,12 @@
                 try {
                     const batch = writeBatch(db);
                     
-                    // 1. 현재 Overrides 전체 삭제 후 복구
                     const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
                     currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
                     prevOverrides.forEach(o => {
                         batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o);
                     });
 
-                    // 2. 현재 Events 전체 삭제 후 복구
                     const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
                     currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
                     prevEvents.forEach(e => {
@@ -544,20 +545,40 @@
                 setCellDraftLabel(item?.customLabel || "");
             };
 
+            // [수정 핵심] 입력창이 즉시 닫히도록 상태 업데이트 순서 조정
             const saveCellEdit = async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
-                pushHistory(); // 변경 직전 상태 저장
-                const batch = writeBatch(db);
-                selectedCells.forEach(cell => {
-                    const { date, period } = cell;
-                    const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
-                    const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
-                    const preservedClass = currentItem?.className || EMPTY_SLOT;
-                    const finalClass = selectedCells.length > 1 ? preservedClass : (cellDraftClass || EMPTY_SLOT);
-                    const id = existingOverride?.id || makeId("o");
-                    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (cellDraftLabel || "").trim() });
-                });
-                await batch.commit(); setEditingCell(null); setSelectedCells([]);
+                
+                // 1. 히스토리 기록
+                pushHistory(); 
+
+                // 2. 현재 상태값 복사 (비동기 처리 중 상태 변화 대비)
+                const currentSelected = [...selectedCells];
+                const classToSave = cellDraftClass;
+                const labelToSave = cellDraftLabel;
+
+                // 3. UI를 먼저 닫아서 즉각적인 반응 제공
+                setEditingCell(null);
+                setSelectedCells([]);
+
+                try {
+                    const batch = writeBatch(db);
+                    currentSelected.forEach(cell => {
+                        const { date, period } = cell;
+                        const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
+                        const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
+                        const preservedClass = currentItem?.className || EMPTY_SLOT;
+                        const finalClass = currentSelected.length > 1 ? preservedClass : (classToSave || EMPTY_SLOT);
+                        const id = existingOverride?.id || makeId("o");
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { 
+                            id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() 
+                        });
+                    });
+                    await batch.commit();
+                } catch (err) { 
+                    console.error("저장 실패:", err); 
+                    setModalMsg("데이터 저장 중 오류가 발생했습니다. 다시 시도해 주세요.");
+                }
             };
 
             const handleDrop = async (e, targetDate, targetPeriod) => {
@@ -565,7 +586,7 @@
                 if (!user || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
                 
-                pushHistory(); // 드래그 시작 전 상태 저장
+                pushHistory();
                 const batch = writeBatch(db);
                 const targetId = makeId("o");
                 batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
@@ -667,7 +688,7 @@
                                                                         <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p>
                                                                     </div>
                                                                 </div>
-                                                            ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : (
+                                                            ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : (
                                                                 <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative">
                                                                     {item?.hasAnyEvent && (
                                                                         <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button>

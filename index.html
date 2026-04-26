@@ -52,7 +52,7 @@
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-        // --- 환경 제공 변수 및 초기화 (MANDATORY RULES 준수) ---
+        // --- 전역 설정 및 초기화 ---
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
             authDomain: "moon-pixel.firebaseapp.com",
@@ -61,7 +61,7 @@
             messagingSenderId: "690517363714",
             appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-v4';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-v3';
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -192,65 +192,63 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [핵심 해결: Rule 3 엄수] 세션 복구를 완벽히 기다리고, 시스템 토큰을 최우선으로 사용
+            // [핵심 해결] 새로고침 시 세션 복구를 완벽히 기다리는 로직
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // 캔버스가 제공하는 토큰이 있다면 최우선적으로 사용하여 계정 일관성 유지
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            // 토큰이 없다면 익명 로그인을 시도하되, 브라우저의 기존 세션을 기다림
-                            await signInAnonymously(auth);
-                        }
+                        // 구글/익명 세션이 있는지 확인될 때까지 UI를 아예 보여주지 않습니다.
+                        onAuthStateChanged(auth, async (u) => {
+                            if (u) {
+                                // 세션 복구 성공
+                                setUser(u);
+                                setIsAuthChecking(false);
+                            } else {
+                                // 세션이 아예 없음 -> 신규 익명 계정 생성
+                                try {
+                                    const anon = await signInAnonymously(auth);
+                                    setUser(anon.user);
+                                } catch(e) { console.error("Anonymous fail:", e); }
+                                setIsAuthChecking(false);
+                            }
+                        });
                     } catch (err) { 
-                        console.error("인증 초기화 실패:", err); 
-                    } finally {
+                        console.error("Auth init error:", err); 
                         setIsAuthChecking(false);
                     }
                 };
                 initAuth();
-                
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setUser(u);
-                });
-                return () => unsubscribe();
             }, []);
 
             const handleGoogleLogin = async () => {
                 const provider = new GoogleAuthProvider();
                 try {
                     const result = await signInWithPopup(auth, provider);
-                    if (result.user) setModalMsg(`${result.user.displayName} 선생님, 환영합니다.`);
+                    if (result.user) setModalMsg(`${result.user.displayName} 선생님, 반갑습니다!`);
                 } catch (err) { 
-                    setModalMsg(`로그인 오류: ${err.message}`); 
+                    console.error("Login error:", err); 
+                    setModalMsg(`로그인 중 오류가 발생했습니다: ${err.message}`); 
                 }
             };
 
             const handleLogout = async () => { 
                 try { 
                     await signOut(auth); 
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
+                    const anon = await signInAnonymously(auth);
+                    setUser(anon.user);
                 } catch (err) { console.error(err); } 
             };
 
-            // [핵심 해결: Rule 1 엄수] 데이터 로딩 경로를 규격대로 고정
+            // 데이터 실시간 동기화
             useEffect(() => {
                 if (!user || !db || isAuthChecking) return;
                 
                 setIsInitialLoading(true);
                 const colNames = ['classes', 'weekly', 'events', 'overrides'];
                 const unsubscribes = colNames.map(name => {
-                    // /artifacts/{appId}/users/{userId}/{collectionName} 경로 엄수
-                    const colRef = collection(db, 'artifacts', appId, 'users', user.uid, name);
-                    return onSnapshot(query(colRef), (snapshot) => {
+                    return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         if (name === 'classes') {
                             const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
@@ -266,7 +264,7 @@
                         
                         setIsInitialLoading(false);
                     }, (err) => { 
-                        console.error(`데이터 로드 실패 (${name}):`, err); 
+                        console.error(`Firestore Error (${name}):`, err); 
                         setIsInitialLoading(false); 
                     });
                 });
@@ -275,7 +273,77 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [기능: 자동 시수 계산]
+            // [모달 버그 및 기능 복구] 초기화 로직
+            const handleFullReset = async () => {
+                if (!user || !db) return;
+                try {
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setIsInitialLoading(true);
+                    const batch = writeBatch(db);
+                    const targets = ['weekly', 'events', 'overrides'];
+                    for (const name of targets) {
+                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
+                        snap.docs.forEach(d => batch.delete(d.ref));
+                    }
+                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+                    classSnap.docs.forEach(d => batch.delete(d.ref));
+                    
+                    await batch.commit();
+                    setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
+                } catch (e) { console.error(e); }
+            };
+
+            const handleLessonReset = async () => {
+                if (!user || !db) return;
+                try {
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setIsInitialLoading(true);
+                    const batch = writeBatch(db);
+                    // 1. 수업 변경 기록(overrides) 전체 삭제 -> 시간표를 엑셀 업로드 원본으로 복구
+                    const overrideSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    overrideSnap.docs.forEach(d => batch.delete(d.ref));
+                    
+                    // 2. 각 학급의 진도명과 메모 초기화
+                    classes.forEach(c => {
+                        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
+                            lessonTitle: "미설정",
+                            memo: ""
+                        });
+                    });
+                    await batch.commit();
+                    setModalMsg("시간표 배치와 학급별 진도가 원본 상태로 복구되었습니다.");
+                } catch (e) { console.error(e); }
+            };
+
+            const pushHistory = useCallback(() => {
+                setHistory(prev => [...prev, { 
+                    overrides: JSON.parse(JSON.stringify(overrides)), 
+                    events: JSON.parse(JSON.stringify(events)) 
+                }].slice(-30));
+            }, [overrides, events]);
+
+            const undo = useCallback(async () => {
+                if (history.length === 0 || !user || !db) return;
+                const lastState = history[history.length - 1];
+                setHistory(prevHistory => prevHistory.slice(0, -1));
+                try {
+                    const batch = writeBatch(db);
+                    const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
+                    lastState.overrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
+                    const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+                    currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
+                    lastState.events.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
+                    await batch.commit();
+                } catch (err) { console.error(err); }
+            }, [history, user, db]);
+
+            useEffect(() => {
+                const handleGlobalKeyDown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); } };
+                window.addEventListener('keydown', handleGlobalKeyDown);
+                return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+            }, [undo]);
+
             const countRemaining = (targetClassName) => {
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const myGrade = getGrade(targetClassName);
@@ -344,7 +412,7 @@
                         Array.from(foundClasses).sort().forEach((name, i) => {
                             const id = `c-${i}`; batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
                         });
-                        await batch.commit(); setModalMsg("시간표 업로드 성공!");
+                        await batch.commit(); setModalMsg("시간표 업로드 완료!");
                     } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
                 };
                 reader.readAsBinaryString(file); e.target.value = "";
@@ -396,18 +464,30 @@
                 reader.readAsBinaryString(file); e.target.value = "";
             };
 
-            const undo = useCallback(async () => {
-                if (history.length === 0 || !user || !db) return;
-                const lastState = history[history.length - 1];
-                setHistory(prevHistory => prevHistory.slice(0, -1));
+            const handleAddManualEvent = async () => {
+                if (!user || !db) return setModalMsg("로그인이 필요합니다.");
+                if (!manualDate || !manualTitle.trim()) return;
+                pushHistory(); const batch = writeBatch(db);
+                manualPeriods.forEach(p => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), { date: manualDate, type: manualType, title: manualTitle.trim(), period: p }); });
+                await batch.commit(); setManualTitle("");
+            };
+
+            const handleDeleteEvent = async (id) => {
+                if (!user || !db || !id) return;
+                pushHistory(); try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
+            };
+
+            const handleClassReorder = async (fromIndex, toIndex) => {
+                if (!user || !db) return;
+                const newClasses = [...classes]; const [movedItem] = newClasses.splice(fromIndex, 1);
+                newClasses.splice(toIndex, 0, movedItem); const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
+                setClasses(updatedWithOrder);
                 try {
                     const batch = writeBatch(db);
-                    const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
-                    lastState.overrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
+                    updatedWithOrder.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { orderIndex: c.orderIndex }); });
                     await batch.commit();
                 } catch (err) { console.error(err); }
-            }, [history, user, db]);
+            };
 
             const getScheduleForDate = (date) => {
                 const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
@@ -451,8 +531,7 @@
 
             const saveCellEdit = async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
-                setHistory(prev => [...prev, { overrides: [...overrides] }]);
-                const currentSelected = [...selectedCells]; const classToSave = cellDraftClass; const labelToSave = cellDraftLabel;
+                pushHistory(); const currentSelected = [...selectedCells]; const classToSave = cellDraftClass; const labelToSave = cellDraftLabel;
                 setEditingCell(null); setSelectedCells([]);
                 try {
                     const batch = writeBatch(db);
@@ -472,8 +551,7 @@
                 e.preventDefault(); setDragOverCell(null);
                 if (!user || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                setHistory(prev => [...prev, { overrides: [...overrides] }]);
-                const batch = writeBatch(db);
+                pushHistory(); const batch = writeBatch(db);
                 const targetId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
                 const sourceId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
                 await batch.commit(); setDragSource(null);
@@ -483,12 +561,12 @@
                 if (!user || !db || !selectedClassId) return;
                 const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
                 await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
-                setModalMsg("기록이 서버에 저장되었습니다.");
+                setModalMsg("클라우드 저장 완료!");
             };
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">사용자 인증 정보 확인 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 및 정보 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
@@ -498,10 +576,10 @@
                     {/* 사이드바 */}
                     <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
                         <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
-                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">UID: {user.uid.slice(0,10)}...</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
+                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
                         
                         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
-                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록</p> 
+                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그하여 순서 변경)</p> 
                             {classes.length > 0 ? classes.map((c, index) => ( 
                                 <div key={c.id} draggable={true} onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
@@ -518,31 +596,26 @@
                                 <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
                                 <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드</Button> 
                                 <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
+                                
+                                <div className="h-px bg-slate-100 my-2"></div>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "진도 내용 및 시간표 복구", message: "모든 학급의 진도명, 메모를 삭제하고\n수정했던 시간표 배치를 원본 상태로 돌리시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 전체 초기화", message: "모든 시간표, 학사일정, 기록이 완전히 삭제됩니다.\n이 작업은 취소할 수 없습니다. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>학기 전체 리셋</Button>
                             </div> 
                         )}
                     </div>
 
                     <div className="flex-1 flex flex-col overflow-hidden">
                         <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
-                            <div className="flex items-center gap-4"> 
-                                <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> 
-                                <div className="h-6 w-px bg-slate-100 mx-2"></div> 
-                                <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> 
-                            </div>
-                            <div className="flex items-center gap-3 text-xs font-bold text-slate-400">
-                                <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> 
-                                    <div className={`w-1.5 h-1.5 rounded-full ${user ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> 
-                                    {user ? '서버 연결됨' : '인증 대기'} 
-                                </div> 
-                                <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button>
-                            </div>
+                            <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 저장소 연결됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
                         </header>
 
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <h2 className="text-2xl font-black text-slate-800">프라이빗 관리 모드</h2> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>로그인 시작</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로드 중...</p></div> ) : (
+                            {!user ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">선생님 전용 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
                                 <div className="max-w-[1600px] mx-auto space-y-6">
                                     <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                        <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경 시 자동 저장됩니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                        <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경된 수업은 (수정) 라벨이 붙습니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
                                         
                                         <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                             <div className="flex min-w-max">
@@ -560,6 +633,7 @@
                                         </div>
                                     </Card>
 
+                                    {/* 상세 기록 */}
                                     {selectedClass && ( 
                                         <Card className="p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"> 
                                             <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">학급별 상세 진도 기록</h2></div> 
@@ -570,9 +644,39 @@
                                                 </div> 
                                                 <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 특이사항 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
                                             </div> 
-                                            <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>진도 저장하기</Button></div> 
+                                            <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>기록 저장하기</Button></div> 
                                         </Card> 
                                     )}
+
+                                    {/* 학사 일정 관리 */}
+                                    <Card className="p-8 shadow-xl shadow-slate-200/40"> 
+                                        <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 관리</h2></div> 
+                                        <div className="grid lg:grid-cols-3 gap-8">
+                                            <div className="lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner">
+                                                <div className="flex flex-col gap-6">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+                                                        <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label><input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
+                                                        <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label><select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm"><option value="휴업">휴업 (수업제외)</option><option value="시험">시험 (수업제외)</option><option value="행사(수업제외)">행사 (수업제외)</option><option value="행사">행사 (수업포함)</option></select></div>
+                                                    </div>
+                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label><input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 재량휴업" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
+                                                    <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
+                                                </div>
+                                            </div>
+                                            <div className="lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 주간 학사 일정 리스트</p>
+                                                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                                                    {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
+                                                        events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
+                                                            <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
+                                                                <div className="flex flex-col gap-1"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-xs font-bold text-slate-700">{e.title}</span></div>
+                                                                <button type="button" onClick={(ev) => { ev.stopPropagation(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash-2" size={14}/></button>
+                                                            </div>
+                                                        ))
+                                                    ) : ( <div className="h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic">등록된 일정이 없습니다.</div> )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </Card>
                                 </div>
                             )}
                         </main>

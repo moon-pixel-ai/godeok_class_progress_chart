@@ -61,7 +61,6 @@
             messagingSenderId: "690517363714",
             appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
-        // 데이터 일관성을 위해 appId 고정
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-v3';
 
         const app = initializeApp(firebaseConfig);
@@ -193,25 +192,24 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] 인증 상태 복구 로직 강화 (새로고침 시 리셋 방지)
+            // [수정 핵심] 새로고침 시 인증 복구 로직 - 세션 복구 대기 후 익명 로그인 처리
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // 구글 세션이 발견될 때까지 기다림
+                        // onAuthStateChanged는 기존 구글 세션이 있는지 확인될 때까지 기다려줍니다.
                         onAuthStateChanged(auth, async (u) => {
                             if (u) {
                                 setUser(u);
                                 setIsAuthChecking(false);
                             } else {
-                                // 세션이 정말 없는 경우에만 익명 로그인 제안 혹은 수행
-                                // 여기서는 선생님의 편의를 위해 자동으로 익명 로그인을 하되, 구글 로그인을 우선시합니다.
+                                // 세션 확인이 완벽히 끝났는데 구글 유저가 없는 경우에만 익명 로그인 진행
                                 try {
                                     const anon = await signInAnonymously(auth);
                                     setUser(anon.user);
-                                } catch(e) {}
+                                } catch(e) { console.error(e); }
                                 setIsAuthChecking(false);
                             }
                         });
@@ -274,24 +272,22 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [추가 기능] 데이터 초기화 로직
+            // [수정 핵심] 데이터 초기화 로직 및 모달 닫기 수정
             const handleFullReset = async () => {
                 if (!user || !db) return;
                 try {
                     const batch = writeBatch(db);
-                    // 시간표, 학사일정, 수업변경 기록 전체 삭제
                     const targets = ['weekly', 'events', 'overrides'];
                     for (const name of targets) {
                         const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
                         snap.docs.forEach(d => batch.delete(d.ref));
                     }
-                    // 학급 목록도 삭제 (새 엑셀 업로드 유도)
                     const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
                     classSnap.docs.forEach(d => batch.delete(d.ref));
                     
                     await batch.commit();
-                    setConfirmModal(null);
-                    setModalMsg("학기 데이터가 완전히 초기화되었습니다. 새로운 시간표를 업로드해주세요.");
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
                 } catch (e) { console.error(e); }
             };
 
@@ -299,6 +295,11 @@
                 if (!user || !db) return;
                 try {
                     const batch = writeBatch(db);
+                    // 1. 수업 변경 기록(overrides) 전체 삭제 -> 시간표 원상복구
+                    const overrideSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    overrideSnap.docs.forEach(d => batch.delete(d.ref));
+                    
+                    // 2. 각 학급의 진도명과 메모 초기화
                     classes.forEach(c => {
                         batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
                             lessonTitle: "미설정",
@@ -306,8 +307,8 @@
                         });
                     });
                     await batch.commit();
-                    setConfirmModal(null);
-                    setModalMsg("모든 학급의 진도 내용과 메모가 초기화되었습니다.");
+                    setConfirmModal(null); // 모달 즉시 닫기
+                    setModalMsg("시간표 수정 기록과 학급별 진도가 원상복구되었습니다.");
                 } catch (e) { console.error(e); }
             };
 
@@ -594,7 +595,7 @@
                                 
                                 <div className="h-px bg-slate-100 my-2"></div>
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 진행 상황 초기화", message: "모든 학급의 진도명과 메모를 삭제하시겠습니까?\n(시간표와 학사일정은 유지됩니다)", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 내용 및 시간표 복구", message: "모든 학급의 진도명, 메모를 삭제하고\n수정했던 시간표 배치를 원상복구하시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
                                 <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 시간표 완전 리셋", message: "모든 시간표, 학사일정, 진도 기록이 삭제됩니다.\n새 학기를 시작할 때만 사용하세요. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>시간표 전체 리셋</Button>
                             </div> 
                         )}

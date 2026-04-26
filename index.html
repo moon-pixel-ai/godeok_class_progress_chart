@@ -61,8 +61,8 @@
             messagingSenderId: "690517363714",
             appId: "1:690517363714:web:a5204517fcc83982942b1b"
         };
-        // 고정된 appId를 사용하여 데이터 경로의 일관성을 보장합니다.
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-standard';
+        // 데이터 일관성을 위해 appId 고정
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-final-v3';
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -85,7 +85,8 @@
                 ghost: "text-slate-500 hover:bg-slate-100",
                 fuchsia: "bg-gradient-to-r from-fuchsia-500 to-sky-500 text-white shadow-md hover:shadow-lg",
                 google: "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm",
-                rose: "bg-rose-500 text-white shadow-md hover:bg-rose-600"
+                rose: "bg-rose-500 text-white shadow-md hover:bg-rose-600",
+                amber: "bg-amber-500 text-white shadow-md hover:bg-amber-600"
             };
             const sizes = { md: "px-4 py-2.5 rounded-2xl text-sm", sm: "px-3 py-1.5 rounded-xl text-xs", icon: "p-2 rounded-xl" };
             return <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>{children}</button>;
@@ -108,8 +109,8 @@
                     <h3 className="text-lg font-black text-slate-800 mb-2">{title}</h3>
                     <p className="text-slate-500 font-bold mb-6 text-xs leading-relaxed whitespace-pre-wrap">{message}</p>
                     <div className="flex gap-2">
-                        <Button onClick={onCancel} variant="outline" className="flex-1">취소</Button>
-                        <Button onClick={onConfirm} variant="rose" className="flex-1">진행하기</Button>
+                        <Button onClick={onCancel} variant="outline" className="flex-1 text-xs">취소</Button>
+                        <Button onClick={onConfirm} variant="rose" className="flex-1 text-xs">진행하기</Button>
                     </div>
                 </Card>
             </div>
@@ -192,35 +193,28 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] 새로고침 시 리셋 문제 해결을 위한 인증 세션 복구 로직 강화
+            // [수정 핵심] 인증 상태 복구 로직 강화 (새로고침 시 리셋 방지)
             useEffect(() => {
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
-                        // 세션 지속성 설정 (로컬 스토리지에 로그인 정보 저장)
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // Canvas 환경의 커스텀 토큰이 있다면 우선 로그인
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        }
-
-                        // onAuthStateChanged는 기존 세션이 있는지 확인될 때까지 기다려줍니다.
-                        const unsubscribe = onAuthStateChanged(auth, async (u) => {
+                        // 구글 세션이 발견될 때까지 기다림
+                        onAuthStateChanged(auth, async (u) => {
                             if (u) {
-                                // 기존 로그인(구글 포함) 세션이 발견되면 해당 유저로 설정
                                 setUser(u);
                                 setIsAuthChecking(false);
                             } else {
-                                // 세션 확인이 끝났는데 유저가 없다면 그때서야 익명 로그인 진행
+                                // 세션이 정말 없는 경우에만 익명 로그인 제안 혹은 수행
+                                // 여기서는 선생님의 편의를 위해 자동으로 익명 로그인을 하되, 구글 로그인을 우선시합니다.
                                 try {
                                     const anon = await signInAnonymously(auth);
                                     setUser(anon.user);
-                                } catch(e) { console.error("Anonymous login failed:", e); }
+                                } catch(e) {}
                                 setIsAuthChecking(false);
                             }
                         });
-                        return () => unsubscribe();
                     } catch (err) { 
                         console.error("Auth init error:", err); 
                         setIsAuthChecking(false);
@@ -243,13 +237,12 @@
             const handleLogout = async () => { 
                 try { 
                     await signOut(auth); 
-                    // 로그아웃 시 즉시 익명으로 전환하여 빈 판을 보여줌
                     const anon = await signInAnonymously(auth);
                     setUser(anon.user);
                 } catch (err) { console.error(err); } 
             };
 
-            // 데이터 실시간 동기화 (Auth 확인이 완벽히 끝난 후 실행)
+            // 데이터 실시간 동기화
             useEffect(() => {
                 if (!user || !db || isAuthChecking) return;
                 
@@ -281,6 +274,43 @@
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
+            // [추가 기능] 데이터 초기화 로직
+            const handleFullReset = async () => {
+                if (!user || !db) return;
+                try {
+                    const batch = writeBatch(db);
+                    // 시간표, 학사일정, 수업변경 기록 전체 삭제
+                    const targets = ['weekly', 'events', 'overrides'];
+                    for (const name of targets) {
+                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
+                        snap.docs.forEach(d => batch.delete(d.ref));
+                    }
+                    // 학급 목록도 삭제 (새 엑셀 업로드 유도)
+                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+                    classSnap.docs.forEach(d => batch.delete(d.ref));
+                    
+                    await batch.commit();
+                    setConfirmModal(null);
+                    setModalMsg("학기 데이터가 완전히 초기화되었습니다. 새로운 시간표를 업로드해주세요.");
+                } catch (e) { console.error(e); }
+            };
+
+            const handleLessonReset = async () => {
+                if (!user || !db) return;
+                try {
+                    const batch = writeBatch(db);
+                    classes.forEach(c => {
+                        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
+                            lessonTitle: "미설정",
+                            memo: ""
+                        });
+                    });
+                    await batch.commit();
+                    setConfirmModal(null);
+                    setModalMsg("모든 학급의 진도 내용과 메모가 초기화되었습니다.");
+                } catch (e) { console.error(e); }
+            };
+
             const pushHistory = useCallback(() => {
                 setHistory(prev => [...prev, { 
                     overrides: JSON.parse(JSON.stringify(overrides)), 
@@ -290,23 +320,18 @@
 
             const undo = useCallback(async () => {
                 if (history.length === 0 || !user || !db) return;
-                
                 const lastState = history[history.length - 1];
-                const prevOverrides = lastState.overrides;
-                const prevEvents = lastState.events;
-                
                 setHistory(prevHistory => prevHistory.slice(0, -1));
-
                 try {
                     const batch = writeBatch(db);
                     const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
                     currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevOverrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
+                    lastState.overrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
                     const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
                     currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
-                    prevEvents.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
+                    lastState.events.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
                     await batch.commit();
-                } catch (err) { console.error("Undo 복구 실패:", err); }
+                } catch (err) { console.error(err); }
             }, [history, user, db]);
 
             useEffect(() => {
@@ -566,6 +591,11 @@
                                 <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
                                 <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드</Button> 
                                 <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
+                                
+                                <div className="h-px bg-slate-100 my-2"></div>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "수업 진행 상황 초기화", message: "모든 학급의 진도명과 메모를 삭제하시겠습니까?\n(시간표와 학사일정은 유지됩니다)", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
+                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 시간표 완전 리셋", message: "모든 시간표, 학사일정, 진도 기록이 삭제됩니다.\n새 학기를 시작할 때만 사용하세요. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>시간표 전체 리셋</Button>
                             </div> 
                         )}
                     </div>

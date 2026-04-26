@@ -70,10 +70,9 @@
   appId: "1:690517363714:web:a5204517fcc83982942b1b",
   measurementId: "G-V5C04W4EG3"
 };
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+// 위에서 만든 설정값으로 앱을 실행합니다.
+app = initializeApp(firebaseConfig);
+auth = getAuth(app);
 db = getFirestore(app);
         } catch (e) { console.error("Firebase 초기화 실패:", e); }
 

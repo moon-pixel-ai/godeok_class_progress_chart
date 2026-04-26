@@ -71,8 +71,8 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         
-        // [수정] 고정된 ID를 사용하여 환경 변화에도 데이터 경로가 유지되도록 함
-        const appId = 'godeok-ms-final-v1'; 
+        // [중요] appId를 고정하여 코드 수정 시에도 데이터 경로가 유지되도록 합니다.
+        const appId = 'godeok-ms-planner-v2'; 
 
         const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
@@ -192,34 +192,48 @@
                 return days;
             }, [weekBaseDate]);
 
-            // [수정 핵심] 새로고침 시 인증 세션 복구 로직 강화
+            // [수정 핵심] 새로고침 시 기존 구글 로그인 세션을 끝까지 기다린 후 없을 때만 익명 로그인 수행
             useEffect(() => {
+                let authSettled = false;
+                
                 const initAuth = async () => {
                     setIsAuthChecking(true);
                     try {
                         await setPersistence(auth, browserLocalPersistence);
                         
-                        // onAuthStateChanged를 통해 세션 복구를 먼저 대기
-                        const unsubscribe = onAuthStateChanged(auth, async (u) => {
-                            if (u) {
-                                setUser(u);
-                                setIsAuthChecking(false);
-                            } else {
-                                // 기존 세션이 정말 없는 경우에만 익명 로그인 시도
-                                try {
-                                    const anonUser = await signInAnonymously(auth);
-                                    setUser(anonUser.user);
-                                } catch (e) { console.error("Anonymous sign in failed", e); }
+                        // 1. 커스텀 토큰 확인
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            try { await signInWithCustomToken(auth, __initial_auth_token); return; } catch(e){}
+                        }
+
+                        // 2. 1.5초간 기존 세션 복구 대기
+                        setTimeout(async () => {
+                            if (!authSettled && !auth.currentUser) {
+                                try { await signInAnonymously(auth); } catch(e){}
                                 setIsAuthChecking(false);
                             }
-                        });
-                        return () => unsubscribe();
+                        }, 1500);
+
                     } catch (err) { 
                         console.error("Auth init error:", err); 
                         setIsAuthChecking(false);
                     }
                 };
+                
                 initAuth();
+
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    if (u) {
+                        authSettled = true;
+                        setUser(u);
+                        setIsAuthChecking(false);
+                    } else {
+                        // 로그아웃 시에만 초기화
+                        setUser(null);
+                        setClasses([]); setWeekly([]); setEvents([]); setOverrides([]);
+                    }
+                });
+                return () => unsubscribe();
             }, []);
 
             const handleGoogleLogin = async () => {
@@ -233,9 +247,13 @@
                 }
             };
 
-            const handleLogout = async () => { try { await signOut(auth); const anon = await signInAnonymously(auth); setUser(anon.user); } catch (err) { console.error(err); } };
+            const handleLogout = async () => { 
+                try { 
+                    await signOut(auth); 
+                    await signInAnonymously(auth); 
+                } catch (err) { console.error(err); } 
+            };
 
-            // [수정] 데이터 로딩 상태 관리 강화
             useEffect(() => {
                 if (!user || !db) { setIsInitialLoading(false); return; }
                 
@@ -523,7 +541,7 @@
 
             const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
 
-            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">로그인 세션 복구 중...</p> </div> ); }
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 상태 복구 중...</p> </div> ); }
 
             return (
                 <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">

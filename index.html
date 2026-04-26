@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>고덕중 개인별 학사 진도 관리 시스템</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com/"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- SheetJS (XLSX) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;800&display=swap');
+        body { font-family: 'Pretendard', sans-serif; overflow-x: hidden; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; border: 2px solid #f8fafc; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .dragging-cell { opacity: 0.2; transform: scale(0.92); filter: grayscale(1); transition: all 0.2s ease; }
+        .drop-target-active { background-color: #f0f9ff !important; border-color: #0ea5e9 !important; border-style: dashed !important; box-shadow: inset 0 0 15px rgba(14, 165, 233, 0.1) !important; transform: scale(1.02); z-index: 20; }
+        
+        /* 사이드바 드래그 전용 스타일 */
+        .sidebar-dragging { opacity: 0.5; background-color: #f1f5f9; border: 2px dashed #cbd5e1; }
+        
+        .timetable-scroll-area { position: relative; max-height: calc(100vh - 240px); overflow: auto; border-radius: 24px; background: #ffffff; }
+        .sticky-top { position: sticky; top: 0; z-index: 40; background: #ffffff; }
+        .sticky-left-col { position: sticky; left: 0; z-index: 45; background: #ffffff; box-shadow: 4px 0 10px rgba(0,0,0,0.05); }
+        .sticky-corner { position: sticky; top: 0; left: 0; z-index: 55; background: #f8fafc; border-right: 1px solid #e2e8f0; }
+
+        .timetable-column { min-width: 180px; flex-shrink: 0; }
+        .selected-cell { outline: 3px solid #0ea5e9; outline-offset: -3px; z-index: 10; }
+
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+    </style>
+</head>
+<body class="bg-slate-50/50">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+        const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
+        const PERIODS = Array.from({ length: 7 }, (_, i) => `${i + 1}교시`);
+        const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
+        const EMPTY_SLOT = "__EMPTY__";
+
+        let app, auth, db;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'godeok-ms-planner';
+        
+        try {
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+            if (firebaseConfig) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
+        } catch (e) { console.error("Firebase 초기화 실패:", e); }
+
+        const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
+
+        const Button = ({ children, onClick, variant = "primary", size = "md", className = "", disabled = false }) => {
+            const base = "inline-flex items-center justify-center font-semibold transition-all active:scale-95 disabled:opacity-50";
+            const variants = {
+                primary: "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-md hover:shadow-lg",
+                outline: "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                ghost: "text-slate-500 hover:bg-slate-100",
+                fuchsia: "bg-gradient-to-r from-fuchsia-500 to-sky-500 text-white shadow-md hover:shadow-lg",
+                google: "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm",
+                rose: "bg-rose-500 text-white shadow-md hover:bg-rose-600"
+            };
+            const sizes = { md: "px-4 py-2.5 rounded-2xl text-sm", sm: "px-3 py-1.5 rounded-xl text-xs", icon: "p-2 rounded-xl" };
+            return <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>{children}</button>;
+        };
+
+        const MessageBox = ({ message, onClose }) => (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center">
+                <Card className="max-w-md w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 mb-4"><Icon name="info" className="text-sky-500" /></div>
+                    <p className="text-slate-600 font-bold mb-6 whitespace-pre-wrap text-sm leading-relaxed">{message}</p>
+                    <Button onClick={onClose} className="w-full">확인</Button>
+                </Card>
+            </div>
+        );
+
+        const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center">
+                <Card className="max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl border-rose-100">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 mb-4"><Icon name="alert-triangle" className="text-rose-500" /></div>
+                    <h3 className="text-lg font-black text-slate-800 mb-2">{title}</h3>
+                    <p className="text-slate-500 font-bold mb-6 text-xs leading-relaxed whitespace-pre-wrap">{message}</p>
+                    <div className="flex gap-2">
+                        <Button onClick={onCancel} variant="outline" className="flex-1">취소</Button>
+                        <Button onClick={onConfirm} variant="rose" className="flex-1">진행하기</Button>
+                    </div>
+                </Card>
+            </div>
+        );
+
+        const makeId = (p) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
+        const shortClass = (s) => (s && s !== EMPTY_SLOT) ? s.replace(/학년\s+/g, '-').replace(/반/g, '') : "-";
+        const getGrade = (name) => { const match = name?.match(/(\d)/); return match ? parseInt(match[1]) : 0; };
+        const getSafeDate = (dateStr) => new Date(dateStr + "T00:00:00");
+        const getLocalIsoString = (d) => {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+        const toKoreanDate = (dateStr) => {
+            if (!dateStr) return "";
+            const parts = dateStr.split('-');
+            return parts.length === 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : dateStr;
+        };
+        const parseTargetGrades = (title) => {
+            if (!title) return [1,2,3];
+            const match = title.match(/\((\d+(?:,\s*\d+)*)학년\)/);
+            if (match) return match[1].split(',').map(s => parseInt(s.trim()));
+            const globalKeywords = ["휴일", "방학", "기념일", "대체공휴일", "신정", "추석", "설날", "재량휴업"];
+            if (globalKeywords.some(k => title.includes(k))) return [1, 2, 3];
+            return [1, 2, 3];
+        };
+
+        const getColorForText = (text) => {
+            if (!text || text === "미설정" || text.trim() === "") return "bg-white border-slate-100 text-slate-700";
+            const bgPalettes = [
+                "bg-blue-100 border-blue-300 text-blue-900", "bg-amber-100 border-amber-400 text-amber-900",
+                "bg-emerald-100 border-emerald-400 text-emerald-900", "bg-rose-100 border-rose-300 text-rose-900",
+                "bg-violet-100 border-violet-300 text-violet-900", "bg-cyan-100 border-cyan-400 text-cyan-900",
+                "bg-orange-100 border-orange-400 text-orange-900", "bg-lime-100 border-lime-400 text-lime-900",
+                "bg-fuchsia-100 border-fuchsia-400 text-fuchsia-900", "bg-teal-100 border-teal-400 text-teal-900",
+                "bg-sky-100 border-sky-300 text-sky-900", "bg-pink-100 border-pink-300 text-pink-900",
+                "bg-indigo-200 border-indigo-400 text-indigo-950", "bg-yellow-200 border-yellow-500 text-yellow-950",
+                "bg-green-200 border-green-500 text-green-950", "bg-red-200 border-red-400 text-red-950",
+                "bg-stone-200 border-stone-400 text-stone-900", "bg-zinc-200 border-zinc-400 text-zinc-900"
+            ];
+            let hash = 5381;
+            for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) + text.charCodeAt(i);
+            const index = Math.abs(hash) % bgPalettes.length;
+            return bgPalettes[index] + " shadow-sm";
+        };
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [isInitialLoading, setIsInitialLoading] = useState(true);
+            const [isAuthChecking, setIsAuthChecking] = useState(true);
+            
+            const [classes, setClasses] = useState([]);
+            const [weekly, setWeekly] = useState([]);
+            const [events, setEvents] = useState([]);
+            const [overrides, setOverrides] = useState([]);
+            const [history, setHistory] = useState([]); 
+            
+            const [selectedClassId, setSelectedClassId] = useState(null);
+            const [weekBaseDate, setWeekBaseDate] = useState(new Date());
+            const [selectedCells, setSelectedCells] = useState([]); 
+            const [editingCell, setEditingCell] = useState(null); 
+            const [cellDraftClass, setCellDraftClass] = useState("");
+            const [cellDraftLabel, setCellDraftLabel] = useState("");
+            const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+            const [modalMsg, setModalMsg] = useState("");
+            const [dragSource, setDragSource] = useState(null);
+            const [dragOverCell, setDragOverCell] = useState(null); 
+            
+            const [manualDate, setManualDate] = useState(getLocalIsoString(new Date()));
+            const [manualType, setManualType] = useState("휴업");
+            const [manualPeriods, setManualPeriods] = useState(["전교시"]);
+            const [manualTitle, setManualTitle] = useState("");
+            const [confirmModal, setConfirmModal] = useState(null);
+
+            const scheduleFileRef = useRef(null);
+            const eventFileRef = useRef(null);
+
+            const currentWeekDays = useMemo(() => {
+                const start = new Date(weekBaseDate);
+                const day = start.getDay();
+                const diffToMonday = day === 0 ? -6 : 1 - day;
+                start.setDate(start.getDate() + diffToMonday);
+                start.setHours(0, 0, 0, 0);
+                const days = [];
+                let current = new Date(start);
+                while (days.length < 10) {
+                    if (current.getDay() !== 0 && current.getDay() !== 6) days.push(new Date(current));
+                    current.setDate(current.getDate() + 1);
+                }
+                return days;
+            }, [weekBaseDate]);
+
+            useEffect(() => {
+                if (!auth) { setIsAuthChecking(false); return; }
+                const initAuth = async () => {
+                    setIsAuthChecking(true);
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) { await signInWithCustomToken(auth, __initial_auth_token); } 
+                        else { await signInAnonymously(auth); }
+                    } catch (err) { console.error("Auth init error:", err); }
+                    finally { setIsAuthChecking(false); }
+                };
+                initAuth();
+                const unsubscribe = onAuthStateChanged(auth, (u) => {
+                    setUser(u);
+                    if (!u || u.isAnonymous) { setClasses([]); setWeekly([]); setEvents([]); setOverrides([]); }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            const handleGoogleLogin = async () => {
+                if (!auth) { setModalMsg("클라우드 설정이 감지되지 않습니다."); return; }
+                const provider = new GoogleAuthProvider();
+                try {
+                    const result = await signInWithPopup(auth, provider);
+                    if (result.user) setModalMsg(`${result.user.displayName} 선생님, 반갑습니다!`);
+                } catch (err) { console.error("Login error:", err); setModalMsg("로그인 중 오류가 발생했습니다."); }
+            };
+
+            const handleLogout = async () => { try { await signOut(auth); await signInAnonymously(auth); } catch (err) { console.error(err); } };
+
+            useEffect(() => {
+                if (!user || user.isAnonymous || !db) { setIsInitialLoading(false); return; }
+                setIsInitialLoading(true);
+                const colNames = ['classes', 'weekly', 'events', 'overrides'];
+                const unsubscribes = colNames.map(name => {
+                    return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        if (name === 'classes') {
+                            const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                            setClasses(sorted);
+                            setSelectedClassId(prevId => {
+                                if (!sorted.length) return null;
+                                if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
+                                return prevId;
+                            });
+                        } else if (name === 'weekly') setWeekly(data);
+                        else if (name === 'events') setEvents(data);
+                        else if (name === 'overrides') setOverrides(data);
+                        setIsInitialLoading(false);
+                    }, (err) => { console.error("Firestore Snapshot Error:", err); setIsInitialLoading(false); });
+                });
+                return () => unsubscribes.forEach(un => un());
+            }, [user]);
+
+            useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
+
+            const pushHistory = useCallback(() => {
+                setHistory(prev => [...prev, { 
+                    overrides: JSON.parse(JSON.stringify(overrides)), 
+                    events: JSON.parse(JSON.stringify(events)) 
+                }].slice(-30));
+            }, [overrides, events]);
+
+            const undo = useCallback(async () => {
+                if (history.length === 0 || !user || user.isAnonymous || !db) return;
+                const { overrides: prevOverrides, events: prevEvents } = history[history.length - 1];
+                setHistory(prevHistory => prevHistory.slice(0, -1));
+                try {
+                    const batch = writeBatch(db);
+                    const oSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    oSnap.docs.forEach(d => batch.delete(d.ref));
+                    prevOverrides.forEach(o => batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o));
+                    const eSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+                    eSnap.docs.forEach(d => batch.delete(d.ref));
+                    prevEvents.forEach(e => batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e));
+                    await batch.commit();
+                } catch (err) { console.error("Undo error:", err); }
+            }, [history, user, db]);
+
+            useEffect(() => {
+                const handleGlobalKeyDown = (e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+                        e.preventDefault();
+                        undo();
+                    }
+                };
+                window.addEventListener('keydown', handleGlobalKeyDown);
+                return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+            }, [undo]);
+
+            const countRemaining = (targetClassName) => {
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                const myGrade = getGrade(targetClassName);
+                const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({ ...e, dateObj: getSafeDate(e.date) })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
+                const targetExam = upcomingExams[0];
+                if (!targetExam) return 0;
+                const end = targetExam.dateObj;
+                let count = 0;
+                const d = new Date(today);
+                while (d < end) {
+                    const iso = getLocalIsoString(d);
+                    const dayName = WEEKDAY_BY_DAY[d.getDay()];
+                    if (WEEKDAYS_MAP.includes(dayName)) {
+                        const dailyOverrides = overrides.filter(o => o.date === iso);
+                        const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
+                        periodsForClassInBase.forEach(p => {
+                            const hasEventAtPeriod = events.some(e => e.date === iso && (e.period === p || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
+                            if (hasEventAtPeriod) return;
+                            const override = dailyOverrides.find(o => o.newPeriod === p);
+                            if (override) { if (override.newClassName === targetClassName) count++; } else { count++; }
+                        });
+                        const trulyAdded = dailyOverrides.filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod));
+                        trulyAdded.forEach(o => {
+                             const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
+                            if (!hasEventAtOverridePeriod) count++;
+                        });
+                    }
+                    d.setDate(d.getDate() + 1);
+                }
+                return count;
+            };
+
+            const refreshRemaining = async () => {
+                if (!user || user.isAnonymous || !db) return;
+                const batch = writeBatch(db);
+                classes.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { remainingBeforeExam: countRemaining(c.name) }); });
+                await batch.commit();
+                setModalMsg("시수 동기화가 완료되었습니다.");
+            };
+
+            const handleScheduleUpload = async (e) => {
+                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                const file = e.target.files[0]; if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    try {
+                        const workbook = XLSX.read(evt.target.result, { type: 'binary' });
+                        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                        const newWeekly = []; const foundClasses = new Set();
+                        const daysInExcel = rows[0] ? rows[0].slice(1) : []; 
+                        for (let i = 1; i < rows.length; i++) {
+                            const row = rows[i];
+                            const periodName = String(row[0] || "").trim();
+                            if (!periodName.includes("교시")) continue;
+                            for (let j = 1; j < row.length; j++) {
+                                let className = String(row[j] || "").trim();
+                                if (!className || className === "-") continue;
+                                const dayName = daysInExcel[j - 1];
+                                if (!WEEKDAYS_MAP.includes(dayName)) continue;
+                                if (className.includes("-") && !className.includes("학년")) { const pts = className.split("-"); className = `${pts[0]}학년 ${pts[1]}반`; }
+                                foundClasses.add(className);
+                                newWeekly.push({ className, weekday: dayName, period: periodName });
+                            }
+                        }
+                        const batch = writeBatch(db);
+                        const oldWeekly = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'weekly'));
+                        oldWeekly.docs.forEach(d => batch.delete(d.ref));
+                        const oldClasses = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+                        oldClasses.docs.forEach(d => batch.delete(d.ref));
+                        const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                        oldOverrides.docs.forEach(d => batch.delete(d.ref));
+                        newWeekly.forEach(w => { const id = makeId("w"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'weekly', id), w); });
+                        Array.from(foundClasses).sort().forEach((name, i) => {
+                            const id = `c-${i}`;
+                            batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
+                        });
+                        await batch.commit();
+                        setModalMsg("새로운 학기 시간표가 업로드되었습니다.\n기존 수업 내역이 리빌딩되었습니다.");
+                    } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
+                };
+                reader.readAsBinaryString(file);
+                e.target.value = "";
+            };
+
+            const handleEventUpload = async (e) => {
+                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                const file = e.target.files[0]; if (!file) return;
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    try {
+                        const workbook = XLSX.read(evt.target.result, { type: 'binary' });
+                        const newEvents = [];
+                        workbook.SheetNames.forEach(sheetName => {
+                            const sheet = workbook.Sheets[sheetName];
+                            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+                            let year = 2026, month = 1, found = false;
+                            for (let i = 0; i < Math.min(15, rows.length); i++) {
+                                for (let j = 0; j < (rows[i]?.length || 0); j++) {
+                                    const cellStr = String(rows[i][j] || "").trim();
+                                    const match = cellStr.match(/(\d+)월\s+(\d{4})/) || cellStr.match(/(\d{4})\s+(\d+)월/);
+                                    if (match) { year = match[1].length === 4 ? parseInt(match[1]) : parseInt(match[2]); month = match[1].length === 4 ? parseInt(match[2]) : parseInt(match[1]); found = true; break; }
+                                }
+                                if (found) break;
+                            }
+                            if (!found) return;
+                            for (let r = 0; r < rows.length; r++) {
+                                const row = rows[r];
+                                for (let c = 0; c < row.length; c++) {
+                                    const val = row[c];
+                                    if (val && !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 31) {
+                                        const day = parseInt(val); let content = String(rows[r + 1]?.[c] || "").trim();
+                                        if (!content || !isNaN(content)) continue;
+                                        const dateStr = getLocalIsoString(getSafeDate(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`));
+                                        let type = "행사";
+                                        if (content.includes("고사") || content.includes("시험")) type = "시험";
+                                        else if (content.includes("휴일") || content.includes("방학") || content.includes("휴업")) type = "휴업";
+                                        newEvents.push({ date: dateStr, type, title: content, period: "전교시" });
+                                    }
+                                }
+                            }
+                        });
+                        const batch = writeBatch(db);
+                        const oldEvents = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+                        oldEvents.docs.forEach(d => batch.delete(d.ref));
+                        newEvents.forEach(e => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), e); });
+                        await batch.commit();
+                        setModalMsg("학사일정 동기화 완료!");
+                    } catch (err) { setModalMsg("파일 읽기 오류!"); }
+                };
+                reader.readAsBinaryString(file);
+                e.target.value = "";
+            };
+
+            const handleAddManualEvent = async () => {
+                if (!user || user.isAnonymous || !db) return setModalMsg("로그인이 필요합니다.");
+                if (!manualDate || !manualTitle.trim()) return;
+                if (manualPeriods.length === 0) return setModalMsg("교시를 하나 이상 선택해 주세요.");
+                pushHistory();
+                const batch = writeBatch(db);
+                manualPeriods.forEach(p => { 
+                    const id = makeId("e"); 
+                    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), { date: manualDate, type: manualType, title: manualTitle.trim(), period: p }); 
+                });
+                await batch.commit();
+                setManualTitle("");
+                setManualPeriods(["전교시"]);
+            };
+
+            const handleDeleteEvent = async (id) => {
+                if (!user || user.isAnonymous || !db || !id) return;
+                try { 
+                    pushHistory();
+                    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); 
+                } catch (err) { console.error("Delete Error:", err); setModalMsg("일정 삭제 중 오류가 발생했습니다."); }
+            };
+
+            const resetOnlyOverrides = async () => {
+                if (!user || user.isAnonymous || !db) return;
+                setConfirmModal(null);
+                try {
+                    const batch = writeBatch(db);
+                    const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    oldOverrides.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                    setModalMsg("수업 수정 및 세부 내역이 초기화되었습니다.");
+                } catch (err) { setModalMsg("초기화 중 오류 발생"); }
+            };
+
+            const resetSemesterData = async () => {
+                if (!user || user.isAnonymous || !db) return;
+                setConfirmModal(null);
+                try {
+                    const batch = writeBatch(db);
+                    const oldWeekly = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'weekly'));
+                    oldWeekly.docs.forEach(d => batch.delete(d.ref));
+                    const oldClasses = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+                    oldClasses.docs.forEach(d => batch.delete(d.ref));
+                    const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+                    oldOverrides.docs.forEach(d => batch.delete(d.ref));
+                    await batch.commit();
+                    setModalMsg("전체 수업 데이터가 초기화되었습니다.\n새로운 학기 시간표를 업로드할 수 있습니다.");
+                } catch (err) { setModalMsg("초기화 중 오류 발생"); }
+            };
+
+            // [추가] 학급 순서 변경 로직
+            const handleClassReorder = async (fromIndex, toIndex) => {
+                if (!user || user.isAnonymous || !db) return;
+                const newClasses = [...classes];
+                const [movedItem] = newClasses.splice(fromIndex, 1);
+                newClasses.splice(toIndex, 0, movedItem);
+                
+                // 로컬 상태 즉시 반영
+                const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
+                setClasses(updatedWithOrder);
+
+                // 서버 업데이트
+                try {
+                    const batch = writeBatch(db);
+                    updatedWithOrder.forEach(c => {
+                        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { orderIndex: c.orderIndex });
+                    });
+                    await batch.commit();
+                } catch (err) { console.error("Reorder Save Error:", err); }
+            };
+
+            const toggleManualPeriod = (p) => {
+                if (p === "전교시") { setManualPeriods(["전교시"]); } else {
+                    let next = manualPeriods.filter(v => v !== "전교시");
+                    if (next.includes(p)) { next = next.filter(v => v !== p); if (next.length === 0) next = ["전교시"]; } else { next.push(p); }
+                    setManualPeriods(next.sort());
+                }
+            };
+
+            const getScheduleForDate = (date) => {
+                const iso = getLocalIsoString(date);
+                const dayName = WEEKDAY_BY_DAY[date.getDay()];
+                if (!WEEKDAYS_MAP.includes(dayName)) return [];
+                const dayEvents = events.filter(e => e.date === iso);
+                const dailyOverrides = overrides.filter(o => o.date === iso);
+                const baseWeek = weekly.filter(w => w.weekday === dayName);
+                return PERIODS.map(period => {
+                    const override = dailyOverrides.find(o => o.newPeriod === period);
+                    const base = baseWeek.find(w => w.period === period);
+                    let className = EMPTY_SLOT;
+                    let source = "none";
+                    let customLabel = "";
+                    let isClassChanged = false;
+                    if (override) {
+                        className = override.newClassName;
+                        customLabel = override.customLabel;
+                        source = "override";
+                        isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT));
+                    } else if (base) {
+                        className = base.className;
+                        source = "base";
+                    }
+                    const grade = getGrade(className);
+                    const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
+                    const isChangche = relevantEvent?.title?.includes("창체");
+                    const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
+                    return {
+                        period, className, source, customLabel, isClassChanged, isChangche,
+                        eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type,
+                        isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent
+                    };
+                });
+            };
+
+            const handleCellClick = (e, date, period, item) => {
+                const iso = getLocalIsoString(date);
+                const clickedCell = { date: iso, period };
+                let newSelection = [];
+                if (e.ctrlKey || e.metaKey) {
+                    const isSelected = selectedCells.some(c => c.date === iso && c.period === period);
+                    if (isSelected) { newSelection = selectedCells.filter(c => !(c.date === iso && c.period === period)); } else { newSelection = [...selectedCells, clickedCell]; }
+                } else if (e.shiftKey && selectedCells.length > 0) {
+                    const lastSelected = selectedCells[selectedCells.length - 1];
+                    const allCells = [];
+                    currentWeekDays.forEach(d => { const dIso = getLocalIsoString(d); PERIODS.forEach(p => allCells.push({ date: dIso, period: p })); });
+                    const startIdx = allCells.findIndex(c => c.date === lastSelected.date && c.period === lastSelected.period);
+                    const endIdx = allCells.findIndex(c => c.date === iso && c.period === period);
+                    if (startIdx !== -1 && endIdx !== -1) {
+                        const low = Math.min(startIdx, endIdx); const high = Math.max(startIdx, endIdx);
+                        const range = allCells.slice(low, high + 1);
+                        const selectionMap = new Map();
+                        selectedCells.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
+                        range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
+                        newSelection = Array.from(selectionMap.values());
+                    }
+                } else { newSelection = [clickedCell]; }
+                setSelectedCells(newSelection);
+                setEditingCell(clickedCell);
+                setCellDraftClass(item?.className || EMPTY_SLOT);
+                setCellDraftLabel(item?.customLabel || "");
+            };
+
+            const saveCellEdit = async () => {
+                if (!user || user.isAnonymous || selectedCells.length === 0 || !db) return;
+                pushHistory();
+                const batch = writeBatch(db);
+                selectedCells.forEach(cell => {
+                    const { date, period } = cell;
+                    const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
+                    const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
+                    const preservedClass = currentItem?.className || EMPTY_SLOT;
+                    const finalClass = selectedCells.length > 1 ? preservedClass : (cellDraftClass || EMPTY_SLOT);
+                    const id = existingOverride?.id || makeId("o");
+                    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (cellDraftLabel || "").trim() });
+                });
+                await batch.commit(); setEditingCell(null); setSelectedCells([]);
+            };
+
+            const handleDrop = async (e, targetDate, targetPeriod) => {
+                e.preventDefault(); setDragOverCell(null);
+                if (!user || user.isAnonymous || !dragSource || !db) return;
+                if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
+                pushHistory();
+                const batch = writeBatch(db);
+                const existingTarget = overrides.find(o => o.date === targetDate && o.newPeriod === targetPeriod);
+                if (existingTarget) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', existingTarget.id)); }
+                const existingSource = overrides.find(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
+                if (existingSource) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', existingSource.id)); }
+                const targetId = makeId("o");
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
+                const sourceId = makeId("o");
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
+                await batch.commit(); setDragSource(null);
+            };
+
+            const updateClassOnServer = async () => {
+                if (!user || user.isAnonymous || !db || !selectedClassId) return;
+                const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
+                await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
+                setModalMsg("클라우드 저장 완료!");
+            };
+
+            const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
+
+            if (isAuthChecking) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 처리 중...</p> </div> ); }
+
+            return (
+                <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
+                    {modalMsg && <MessageBox message={modalMsg} onClose={() => setModalMsg("")} />}
+                    {confirmModal && <ConfirmModal {...confirmModal} />}
+
+                    <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
+                        <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
+                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
+                        
+                        {/* [수정] 사이드바 드래그 순서 변경 적용 부분 */}
+                        <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
+                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그하여 순서 변경)</p> 
+                            {classes.length > 0 ? classes.map((c, index) => ( 
+                                <div 
+                                    key={c.id} 
+                                    draggable={true}
+                                    onDragStart={(e) => {
+                                        e.dataTransfer.setData("classIndex", index);
+                                        e.currentTarget.classList.add("sidebar-dragging");
+                                    }}
+                                    onDragEnd={(e) => {
+                                        e.currentTarget.classList.remove("sidebar-dragging");
+                                    }}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        const fromIndex = parseInt(e.dataTransfer.getData("classIndex"));
+                                        const toIndex = index;
+                                        if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex);
+                                    }}
+                                    className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 cursor-grab active:cursor-grabbing ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`}
+                                >
+                                    <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
+                                        <div className="flex flex-col">
+                                            <span>{shortClass(c.name)}</span>
+                                            <span className={`text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`}>{c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle}</span>
+                                        </div> 
+                                        <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
+                                    </button>
+                                </div> 
+                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic">데이터 로딩 대기 중...</p> </div> )} 
+                        </div>
+
+                        {user && !user.isAnonymous && ( 
+                            <div className="p-6 border-t border-slate-100 space-y-3"> 
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-2">데이터 관리 및 학기 전환</p>
+                                <input ref={scheduleFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleScheduleUpload} /> 
+                                <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
+                                <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-2.5 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드(리빌딩)</Button> 
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={() => setConfirmModal({ title: "세부 내역 초기화", message: "직접 입력하신 수업 활동명과\n배치 수정 내역만 모두 삭제하시겠습니까?\n(기본 시간표와 학급 목록은 유지됩니다.)", onConfirm: resetOnlyOverrides, onCancel: () => setConfirmModal(null) })} className="p-3 bg-slate-50 text-slate-400 rounded-2xl text-[9px] font-bold border border-slate-100 hover:bg-rose-50 hover:text-rose-500 transition-colors text-center leading-tight">활동 내역만<br/>초기화</button>
+                                    <button onClick={() => setConfirmModal({ title: "전체 데이터 초기화", message: "학사 일정을 제외한 모든 수업 데이터\n(시간표, 학급 목록, 진도 등)를 삭제합니다.\n2학기 전환 시 사용해 주세요.", onConfirm: resetSemesterData, onCancel: () => setConfirmModal(null) })} className="p-3 bg-slate-50 text-slate-400 rounded-2xl text-[9px] font-bold border border-slate-100 hover:bg-rose-50 hover:text-rose-500 transition-colors text-center leading-tight">학기 데이터<br/>전체 초기화</button>
+                                </div>
+                                <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-2.5 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
+                            </div> 
+                        )}
+                    </div>
+                    <div className="flex-1 flex flex-col overflow-hidden">
+                        <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
+                            <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user || user.isAnonymous} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
+                            <div className="flex items-center gap-3"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user && !user.isAnonymous ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user && !user.isAnonymous ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user && !user.isAnonymous ? '클라우드 연결됨' : '로그인 필요'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user || user.isAnonymous} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화</Button> </div>
+                        </header>
+                        <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
+                            {!user || user.isAnonymous ? ( <div className="h-full flex flex-col items-center justify-center gap-6 animate-in fade-in duration-500"> <div className="w-20 h-20 bg-sky-50 rounded-[30px] flex items-center justify-center text-sky-500 shadow-inner"><Icon name="lock" size={32} /></div> <div className="text-center"> <h2 className="text-2xl font-black text-slate-800 mb-2">프라이빗 관리 모드</h2> <p className="text-slate-400 font-bold text-sm leading-relaxed">구글 로그인을 통해 선생님만의 데이터를 안전하게 관리하세요.</p> </div> <Button variant="primary" className="px-12 py-4 shadow-xl text-base" onClick={handleGoogleLogin}>시작하기</Button> </div> ) : isInitialLoading ? ( <div className="h-full flex flex-col items-center justify-center gap-4"><div className="loader"></div><p className="text-sm font-bold text-slate-400 italic">데이터 로딩 중...</p></div> ) : (
+                                <div className="max-w-[1600px] mx-auto space-y-6">
+                                    <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
+                                        <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">배치를 변경하면 (수정) 라벨이 표시됩니다. 가로로 스크롤하여 다음 주 일정을 확인하세요.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                        <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
+                                            <div className="flex min-w-max">
+                                                <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-24 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
+                                                {currentWeekDays.map((day, dIdx) => {
+                                                    const data = getScheduleForDate(day); const dIso = getLocalIsoString(day);
+                                                    return (<div key={day.toString()} className={`timetable-column border-r border-slate-50 ${dIdx >= 5 ? "bg-slate-50/20" : ""}`}><div className="h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm bg-white/90 backdrop-blur-md">
+                                                        <span className={`block text-base font-black leading-none ${day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span>
+                                                        <span className="text-[10px] font-bold text-slate-400 mt-1 block">{day.getMonth()+1}/{day.getDate()}</span>
+                                                    </div>{PERIODS.map(period => {
+                                                        const item = data.find(d => d.period === period); 
+                                                        const isEditing = editingCell?.date === dIso && editingCell?.period === period; 
+                                                        const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); 
+                                                        const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
+                                                        const colorClass = item?.hasAnyEvent ? (item.eventType === '시험' ? "bg-indigo-100 border-indigo-400 text-indigo-900" : item.eventType === '휴업' ? "bg-rose-100 border-rose-400 text-rose-900" : "bg-emerald-100 border-emerald-400 text-emerald-900") : getColorForText(item?.customLabel || "");
+                                                        return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
+                                                            {item?.isEventMode ? (
+                                                                <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center">
+                                                                    <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button>
+                                                                    <div className="pointer-events-none">
+                                                                        <p className="text-[8px] font-black uppercase opacity-60 mb-1 leading-none">{item.eventType}</p>
+                                                                        <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p>
+                                                                    </div>
+                                                                </div>
+                                                            ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : (
+                                                                <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative">
+                                                                    {item?.hasAnyEvent && (
+                                                                        <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button>
+                                                                    )}
+                                                                    {item?.className !== EMPTY_SLOT && (
+                                                                        <span className="font-black text-sm tracking-tighter leading-none pointer-events-none">
+                                                                            {shortClass(item?.className)}
+                                                                            {item?.isClassChanged && <span className="text-[8px] text-amber-600 ml-1 font-bold">(수정)</span>}
+                                                                        </span>
+                                                                    )}
+                                                                    {item?.className === EMPTY_SLOT && item?.hasAnyEvent && (
+                                                                        <p className="text-[10px] font-black leading-tight break-all line-clamp-3 text-center pointer-events-none">{item.eventTitle}</p>
+                                                                    )}
+                                                                    {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && (
+                                                                        <span className={`text-[10px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}>
+                                                                            {item.isChangche ? '창체' : (item.eventTitle.length > 5 ? item.eventTitle.slice(0,5)+'..' : item.eventTitle)}
+                                                                        </span>
+                                                                    )}
+                                                                    {item?.customLabel && (<span className="text-[9px] font-bold mt-1 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)}
+                                                                    {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>}
+                                                                </div>
+                                                            )}</div></div>);
+                                                    })}</div>);
+                                                })}
+                                            </div>
+                                        </div>
+                                    </Card>
+                                    {selectedClass && ( 
+                                        <Card className="p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"> 
+                                            <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">상세 진도 기록</h2></div> 
+                                            <div className="grid lg:grid-cols-2 gap-10"> 
+                                                <div className="space-y-5"> 
+                                                    <div className="bg-slate-50 p-5 rounded-[24px] border border-slate-100 shadow-inner"><div className="flex items-center justify-between"><div className="flex flex-col"><p className="text-[9px] font-black text-slate-400 mb-1 uppercase">선택 학급</p><span className="text-2xl font-black text-slate-800">{shortClass(selectedClass.name)}</span></div><div className="flex flex-col items-end"><span className="text-[10px] font-bold text-slate-400 mb-1">시험까지 남은 수업</span><span className="bg-sky-500 px-3 py-1 rounded-full text-[11px] font-black text-white shadow-lg">{selectedClass.remainingBeforeExam}회</span></div></div></div> 
+                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
+                                                </div> 
+                                                <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
+                                            </div> 
+                                            <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>기록 저장하기</Button></div> 
+                                        </Card> 
+                                    )}
+                                    <Card className="p-8 shadow-xl shadow-slate-200/40"> 
+                                        <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 추가 및 관리</h2></div> 
+                                        <div className="grid lg:grid-cols-3 gap-8">
+                                            <div className="lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner">
+                                                <div className="flex flex-col gap-6">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label>
+                                                            <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all" />
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label>
+                                                            <select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all">
+                                                                <option value="휴업">휴업 (수업제외)</option>
+                                                                <option value="시험">시험 (수업제외)</option>
+                                                                <option value="행사(수업제외)">행사 (수업제외)</option>
+                                                                <option value="행사">행사 (수업포함)</option>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용 (대상 학년)</label>
+                                                        <input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 창체" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm focus:ring-2 focus:ring-indigo-400 transition-all" />
+                                                    </div>
+                                                    <div className="space-y-3">
+                                                        <label className="text-[10px] font-black text-slate-400 uppercase ml-2">적용 교시</label>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            <button type="button" onClick={() => toggleManualPeriod("전교시")} className={`px-5 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes("전교시") ? "bg-sky-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>전교시</button>
+                                                            {PERIODS.map(p => (<button type="button" key={p} onClick={() => toggleManualPeriod(p)} className={`px-4 py-3 rounded-xl text-[11px] font-black transition-all border ${manualPeriods.includes(p) && !manualPeriods.includes("전교시") ? "bg-indigo-500 text-white shadow-md" : "bg-white text-slate-500 border-slate-200"}`}>{p.replace("교시", "")}</button>))}
+                                                        </div>
+                                                    </div>
+                                                    <div className="pt-2">
+                                                        <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="lg:col-span-1 flex flex-col h-full">
+                                                <p className="text-[10px] font-black text-slate-400 uppercase ml-2 mb-2 flex items-center gap-1"><Icon name="list" size={12}/> 이번 주 등록된 일정 관리</p>
+                                                <div className="flex-1 bg-white border border-slate-100 rounded-[32px] overflow-hidden flex flex-col shadow-sm">
+                                                    <div className="overflow-y-auto flex-1 custom-scrollbar p-3">
+                                                        {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
+                                                            events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
+                                                                <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
+                                                                    <div className="flex flex-col gap-1">
+                                                                        <div className="flex items-center gap-2"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-[9px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold">{e.period}</span></div>
+                                                                        <span className="text-xs font-bold text-slate-700 leading-tight">{e.title}</span>
+                                                                    </div>
+                                                                    <button type="button" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors flex-shrink-0 cursor-pointer z-[999] pointer-events-auto"><Icon name="trash-2" size={14}/></button>
+                                                                </div>
+                                                            ))
+                                                        ) : ( <div className="h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic text-center leading-relaxed">등록된 일정이 없습니다.</div> )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </Card>
+                                </div>
+                            )}
+                        </main>
+                    </div>
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<App />);
+    </script>
+</body>
+</html>

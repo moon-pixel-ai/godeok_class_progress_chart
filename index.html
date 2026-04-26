@@ -194,20 +194,17 @@ const appId = 'godeok-ms-final-v3';
                 return days;
             }, [weekBaseDate]);
 
-            // [완벽 해결] 임시 계정을 만들지 않고 오직 구글 로그인만 기다립니다.
+// [1번 교체] 인증 확인 로직 (더 이상 꼬이지 않게 완전히 단순화)
 useEffect(() => {
     setIsAuthChecking(true);
     
-    // 구글 성지기가 선생님을 기억하는지 확인합니다.
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-        if (u) {
-            setUser(u); // 1. 구글 로그인이 확인되면 주인으로 모십니다.
-        } else {
-            setUser(null); // 2. 안 되어있으면 가짜 계정 만들지 말고 빈칸으로 둡니다!
-        }
-        setIsAuthChecking(false); // 3. 로딩 화면(뱅글뱅글) 끄기
+    // 파이어베이스 기본 기능으로 자동 로그인 상태만 확인합니다.
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        console.log("현재 로그인 상태:", currentUser ? "로그인됨" : "로그인 안됨");
+        setUser(currentUser);
+        setIsAuthChecking(false); // 확인 끝나면 즉시 로딩창을 끕니다!
     });
-
+    
     return () => unsubscribe();
 }, []);
 
@@ -231,63 +228,53 @@ useEffect(() => {
     } 
 };
 
-// [완벽 해결] 데이터 실시간 동기화 (로딩 멈춤 및 무한루프 원천 차단)
+// [2번 교체] 데이터 실시간 동기화 (로딩 멈춤 절대 없음)
 useEffect(() => {
-    // 1. user 전체가 아닌 user.uid(고유 문자열)만 확인하여 무한루프를 차단합니다.
-    if (!user?.uid || !db || isAuthChecking) return;
-    
+    // 인증 확인 중이거나, 로그인이 안 된 상태면 창고 근처에도 가지 마!
+    if (isAuthChecking) return;
+    if (!user) {
+        setIsInitialLoading(false);
+        return;
+    }
+
     let isMounted = true;
-    let unsubscribes = [];
-    setIsInitialLoading(true);
+    setIsInitialLoading(true); // 이제 진짜 주인임이 확인됐으니 데이터 로딩 시작!
+    
+    let loadedCount = 0;
+    const colNames = ['classes', 'weekly', 'events', 'overrides'];
+    const unsubscribes = [];
 
-    const startSync = async () => {
-        try {
-            // 2. 파이어베이스가 멈춰버리는 고질적 버그를 해결하기 위해, 
-            // 데이터를 가져오기 직전에 최신 출입증으로 1회 강제 갱신합니다.
-            await user.getIdToken(true); 
-        } catch (error) {
-            console.warn("출입증 갱신 지연:", error);
-        }
+    colNames.forEach(name => {
+        const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), 
+        (snapshot) => {
+            if (!isMounted) return;
+            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        if (!isMounted) return;
+            if (name === 'classes') {
+                const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                setClasses(sorted);
+                setSelectedClassId(prev => (!prev || !sorted.find(c => c.id === prev)) && sorted.length ? sorted[0].id : prev);
+            } else if (name === 'weekly') setWeekly(data);
+            else if (name === 'events') setEvents(data);
+            else if (name === 'overrides') setOverrides(data);
 
-        const colNames = ['classes', 'weekly', 'events', 'overrides'];
-        
-        // 3. 막혔던 문이 뚫렸으니 정상적으로 데이터를 촥! 가져옵니다.
-        unsubscribes = colNames.map(name => {
-            return onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
-                if (!isMounted) return;
-                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                
-                if (name === 'classes') {
-                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                    setClasses(sorted);
-                    
-                    setSelectedClassId(prevId => {
-                        if (!sorted.length) return null;
-                        if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
-                        return prevId;
-                    });
-                } else if (name === 'weekly') setWeekly(data);
-                else if (name === 'events') setEvents(data);
-                else if (name === 'overrides') setOverrides(data);
-                
-                setIsInitialLoading(false); // 데이터가 오면 로딩 뱅글뱅글 끄기!
-            }, (err) => { 
-                console.error(`Firestore 오류 (${name}):`, err);
-                setIsInitialLoading(false); 
-            });
+            loadedCount++;
+            if (loadedCount >= colNames.length) setIsInitialLoading(false); // 4개 다 오면 무조건 뱅글뱅글 꺼!
+        }, 
+        (err) => {
+            console.error(`데이터 에러 (${name}):`, err);
+            if (!isMounted) return;
+            loadedCount++;
+            if (loadedCount >= colNames.length) setIsInitialLoading(false); // 에러가 나도 뱅글뱅글은 끕니다!
         });
-    };
-
-    startSync();
+        unsubscribes.push(un);
+    });
 
     return () => {
         isMounted = false;
         unsubscribes.forEach(un => un());
     };
-// ★ 핵심 해결포인트: 배열 안에 user 대신 user?.uid 를 넣어서 무한 쳇바퀴를 끊어버렸습니다!
-}, [user?.uid, isAuthChecking, db]);
+}, [user, isAuthChecking]); // ★ user.uid니 뭐니 복잡하게 안 하고 원래대로 돌렸습니다.
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

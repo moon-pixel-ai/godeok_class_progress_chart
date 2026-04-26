@@ -228,60 +228,55 @@ const handleLogout = async () => {
         setUser(null); // 그냥 깨끗하게 로그아웃만 합니다.
     } catch (err) { console.error("로그아웃 실패:", err); } 
 };
-            // 데이터 실시간 동기화 (권한 오류 완벽 해결 버전)
+            // 데이터 실시간 동기화 (무한루프 완벽 차단 및 로딩 개선 버전)
 useEffect(() => {
     if (!user || !db || isAuthChecking) return;
 
     let isMounted = true;
     const unsubscribes = [];
 
-    const fetchWithFreshToken = async () => {
-        setIsInitialLoading(true);
-        
-        try {
-            // ★ 핵심 마법: 창고(Firestore) 문을 열기 전에, 구글 출입증(토큰)을 강제로 가장 최신 상태로 갱신합니다!
-            await user.getIdToken(true);
-        } catch (e) {
-            console.warn("출입증 확인 지연 (새로고침 중):", e);
-        }
+    // 1. 무한루프 주범(getIdToken) 완전 삭제! 바로 데이터 요청 시작
+    setIsInitialLoading(true);
+    let loadedCount = 0;
+    const colNames = ['classes', 'weekly', 'events', 'overrides'];
+    
+    colNames.forEach(name => {
+        const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
+            if (!isMounted) return;
+            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        if (!isMounted) return; // 그 사이에 화면을 껐다면 중지
+            if (name === 'classes') {
+                const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                setClasses(sorted);
+                setSelectedClassId(prevId => {
+                    if (!sorted.length) return null;
+                    if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
+                    return prevId;
+                });
+            } else if (name === 'weekly') setWeekly(data);
+            else if (name === 'events') setEvents(data);
+            else if (name === 'overrides') setOverrides(data);
 
-        const colNames = ['classes', 'weekly', 'events', 'overrides'];
-        
-        colNames.forEach(name => {
-            const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), (snapshot) => {
-                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-                if (name === 'classes') {
-                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                    setClasses(sorted);
-                    setSelectedClassId(prevId => {
-                        if (!sorted.length) return null;
-                        if (!prevId || !sorted.find(c => c.id === prevId)) return sorted[0].id;
-                        return prevId;
-                    });
-                } else if (name === 'weekly') setWeekly(data);
-                else if (name === 'events') setEvents(data);
-                else if (name === 'overrides') setOverrides(data);
-
+            // 2. 창고 문 4개가 다 열리면 로딩 화면(뱅글뱅글) 끄기!
+            loadedCount++;
+            if (loadedCount >= colNames.length) {
                 setIsInitialLoading(false);
-            }, (err) => {
-                // 쫓겨났을 때 여기서 에러가 났던 겁니다! 이제 안 납니다.
-                console.error(`창고 접근 권한 오류 (${name}):`, err);
-                setIsInitialLoading(false);
-            });
-            unsubscribes.push(un);
+            }
+        }, (err) => {
+            console.error(`창고 권한 오류 (${name}):`, err);
+            if (!isMounted) return;
+            loadedCount++;
+            if (loadedCount >= colNames.length) setIsInitialLoading(false);
         });
-    };
-
-    fetchWithFreshToken();
+        unsubscribes.push(un);
+    });
 
     return () => {
         isMounted = false;
         unsubscribes.forEach(un => un());
     };
-}, [user, isAuthChecking]);
+// ★ 3. 핵심: user 객체 전체가 아니라 'user.uid(고유아이디)'만 감시해서 불필요한 새로고침 차단!
+}, [user?.uid, isAuthChecking, db]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

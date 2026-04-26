@@ -192,30 +192,28 @@
                 return days;
             }, [weekBaseDate]);
 
-           // [데이터 복구 버그 수정본]
+        // [최종 수정본] 익명 로그인을 빼고 구글 로그인 유지에만 집중합니다!
 useEffect(() => {
     const initAuth = async () => {
         setIsAuthChecking(true);
         try {
+            // 브라우저가 로그인 정보를 기억하도록 설정합니다.
             await setPersistence(auth, browserLocalPersistence);
             
-            onAuthStateChanged(auth, async (u) => {
+            // 로그인 상태가 변하는지(새로고침 포함) 감시합니다.
+            onAuthStateChanged(auth, (u) => {
                 if (u) {
-                    // 1. 먼저 사용자가 누구인지 등록합니다.
+                    // 구글 로그인 주인이 맞다면 그 정보를 사용자(user)로 등록!
                     setUser(u);
-                    // 2. 그 다음 '인증 확인 중' 상태를 해제합니다.
-                    // 이렇게 해야 아래쪽에 있는 데이터 로딩(onSnapshot) 레이더가 즉시 작동합니다.
-                    setTimeout(() => setIsAuthChecking(false), 100); 
                 } else {
-                    try {
-                        const anon = await signInAnonymously(auth);
-                        setUser(anon.user);
-                    } catch(e) { console.error("신규 접속 오류:", e); }
-                    setIsAuthChecking(false);
+                    // 로그인이 안 되어 있다면 사용자를 비워둡니다.
+                    setUser(null);
                 }
+                // 확인이 끝났으니 로딩 화면을 끕니다.
+                setIsAuthChecking(false);
             });
         } catch (err) { 
-            console.error("인증 초기화 오류:", err);
+            console.error("인증 초기화 실패:", err);
             setIsAuthChecking(false);
         }
     };
@@ -232,14 +230,14 @@ useEffect(() => {
                 }
             };
 
-            const handleLogout = async () => { 
-                try { 
-                    await signOut(auth); 
-                    const anon = await signInAnonymously(auth);
-                    setUser(anon.user);
-                } catch (err) { console.error(err); } 
-            };
-
+const handleLogout = async () => { 
+    try { 
+        await signOut(auth);
+        setUser(null); // 그냥 깨끗하게 로그아웃만 합니다.
+    } catch (err) { 
+        console.error("로그아웃 에러:", err);
+    } 
+};
             // 데이터 실시간 동기화
             useEffect(() => {
                 if (!user || !db || isAuthChecking) return;

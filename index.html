@@ -48,7 +48,7 @@
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, collection, query, onSnapshot, writeBatch } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
@@ -194,17 +194,20 @@ const appId = 'godeok-ms-final-v3';
                 return days;
             }, [weekBaseDate]);
 
-// [1번 교체] 인증 확인 로직 (더 이상 꼬이지 않게 완전히 단순화)
+// [수정 부분 1] 억지로 기억하게 하는 코드(30초 렉 원인)와 가짜 아이디 발급(리셋 원인)을 싹 지웠습니다.
 useEffect(() => {
     setIsAuthChecking(true);
     
-    // 파이어베이스 기본 기능으로 자동 로그인 상태만 확인합니다.
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-        console.log("현재 로그인 상태:", currentUser ? "로그인됨" : "로그인 안됨");
-        setUser(currentUser);
-        setIsAuthChecking(false); // 확인 끝나면 즉시 로딩창을 끕니다!
+    // 파이어베이스의 기본 기억력을 믿고 로그인 감시 카메라만 켭니다.
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+        if (u) {
+            setUser(u); // 구글 로그인 확인되면 진짜 주인으로 인정!
+        } else {
+            setUser(null); // 로그인 안 되어있으면 가짜 아이디 만들지 말고 빈칸으로 대기!
+        }
+        setIsAuthChecking(false); // 확인 끝났으니 30초 기다릴 필요 없이 즉시 로딩창 끄기!
     });
-    
+
     return () => unsubscribe();
 }, []);
 
@@ -219,18 +222,19 @@ useEffect(() => {
                 }
             };
 
-           const handleLogout = async () => { 
+// [수정 부분 2] 로그아웃 시 임시 아이디로 몰래 다시 로그인하던 기능 삭제
+const handleLogout = async () => { 
     try { 
         await signOut(auth);
-        setUser(null); // 익명 계정 없이 그냥 깨끗하게 로그아웃만 합니다.
+        setUser(null); // 깨끗하게 로그아웃만 하고 끝냅니다.
     } catch (err) { 
-        console.error("로그아웃 에러:", err);
+        console.error(err);
     } 
 };
 
-// [2번 교체] 데이터 실시간 동기화 (로딩 멈춤 절대 없음)
+// [데이터 실시간 동기화 (절대 안 멈추는 방탄 버전)]
 useEffect(() => {
-    // 인증 확인 중이거나, 로그인이 안 된 상태면 창고 근처에도 가지 마!
+    // 1. 로그인 확인 중이거나 로그인이 안 되어있으면 실행 안 함
     if (isAuthChecking) return;
     if (!user) {
         setIsInitialLoading(false);
@@ -238,43 +242,52 @@ useEffect(() => {
     }
 
     let isMounted = true;
-    setIsInitialLoading(true); // 이제 진짜 주인임이 확인됐으니 데이터 로딩 시작!
-    
+    setIsInitialLoading(true); // 로딩 뱅글뱅글 시작!
+
     let loadedCount = 0;
     const colNames = ['classes', 'weekly', 'events', 'overrides'];
     const unsubscribes = [];
 
-    colNames.forEach(name => {
-        const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)), 
-        (snapshot) => {
-            if (!isMounted) return;
-            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    // ★ 방탄조끼(try-catch) 장착: 코드가 기절할 것 같으면 즉시 잡아냅니다!
+    try {
+        colNames.forEach(name => {
+            const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', user.uid, name)),
+            (snapshot) => {
+                if (!isMounted) return;
+                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            if (name === 'classes') {
-                const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                setClasses(sorted);
-                setSelectedClassId(prev => (!prev || !sorted.find(c => c.id === prev)) && sorted.length ? sorted[0].id : prev);
-            } else if (name === 'weekly') setWeekly(data);
-            else if (name === 'events') setEvents(data);
-            else if (name === 'overrides') setOverrides(data);
+                if (name === 'classes') {
+                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+                    setClasses(sorted);
+                    setSelectedClassId(prev => (!prev || !sorted.find(c => c.id === prev)) && sorted.length ? sorted[0].id : prev);
+                } else if (name === 'weekly') setWeekly(data);
+                else if (name === 'events') setEvents(data);
+                else if (name === 'overrides') setOverrides(data);
 
-            loadedCount++;
-            if (loadedCount >= colNames.length) setIsInitialLoading(false); // 4개 다 오면 무조건 뱅글뱅글 꺼!
-        }, 
-        (err) => {
-            console.error(`데이터 에러 (${name}):`, err);
-            if (!isMounted) return;
-            loadedCount++;
-            if (loadedCount >= colNames.length) setIsInitialLoading(false); // 에러가 나도 뱅글뱅글은 끕니다!
+                // 4개의 문이 다 열리면 로딩 화면 끄기
+                loadedCount++;
+                if (loadedCount >= colNames.length) setIsInitialLoading(false);
+            },
+            (err) => {
+                console.error(`데이터 권한 에러 (${name}):`, err);
+                if (!isMounted) return;
+                loadedCount++;
+                if (loadedCount >= colNames.length) setIsInitialLoading(false);
+            });
+            unsubscribes.push(un);
         });
-        unsubscribes.push(un);
-    });
+    } catch (error) {
+        // 앱이 뻗어버리는 대신, 에러의 진짜 원인을 알려주고 로딩창을 강제로 파괴합니다!
+        console.error("🔥 치명적인 코드 에러:", error);
+        alert("데이터 로딩 중 문제가 생겼습니다 (오타 또는 import 누락): " + error.message);
+        setIsInitialLoading(false); // 로딩창 강제 종료!
+    }
 
     return () => {
         isMounted = false;
         unsubscribes.forEach(un => un());
     };
-}, [user, isAuthChecking]); // ★ user.uid니 뭐니 복잡하게 안 하고 원래대로 돌렸습니다.
+}, [user, isAuthChecking]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 

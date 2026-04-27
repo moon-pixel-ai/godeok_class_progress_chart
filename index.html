@@ -265,7 +265,7 @@
                 if (window.lucide) window.lucide.createIcons(); 
             }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides, weekBaseDate]);
 
-            // [수정: 시수 중복 계산 방지] Map을 활용하여 날짜별 교시의 고유성을 보장합니다.
+            // [수정: 시수 중복 계산 방지] Map을 활용하여 날짜별 교시의 고유성을 보장하며 중복 데이터를 원천 배제합니다.
             const countRemaining = useCallback((targetClassName) => {
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const myGrade = getGrade(targetClassName);
@@ -275,9 +275,9 @@
                 while (d < end) {
                     const iso = getLocalIsoString(d); const dayName = WEEKDAY_BY_DAY[d.getDay()];
                     if (WEEKDAYS_MAP.includes(dayName)) {
-                        // 중복된 override 문서를 방지하기 위해 Map 사용
                         const dailyOverrides = overrides.filter(o => o.date === iso);
                         const overrideMap = new Map();
+                        // 동일한 시간대의 Override는 단 하나만 인정
                         dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
 
                         const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
@@ -290,7 +290,6 @@
                             if (override) { if (override.newClassName === targetClassName) dailyCount++; } else { dailyCount++; }
                         });
                         
-                        // 추가된 수업 계산 (고유 Map 사용)
                         const trulyAddedCount = Array.from(overrideMap.values()).filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod)).filter(o => {
                              const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
                              return !hasEventAtOverridePeriod;
@@ -317,10 +316,10 @@
                     const batch = writeBatch(db);
                     const targets = ['weekly', 'events', 'overrides'];
                     for (const name of targets) {
-                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
+                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', currentUser.uid, name));
                         snap.docs.forEach(d => batch.delete(d.ref));
                     }
-                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'classes'));
                     classSnap.docs.forEach(d => batch.delete(d.ref));
                     await batch.commit();
                     setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
@@ -368,7 +367,7 @@
                 } catch (err) { console.error(err); }
             }, [history, user, db]);
 
-            // [수정: 데이터 사라짐 방지] 화면 출력 시에도 고유 Map을 사용하여 중복 데이터를 한 번만 렌더링합니다.
+            // [수정: 중복 데이터 화면 출력 방지] Map을 통해 고유 슬롯당 하나의 데이터만 출력합니다.
             const getScheduleForDate = useCallback((date) => {
                 const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
                 if (!WEEKDAYS_MAP.includes(dayName)) return [];
@@ -406,8 +405,13 @@
 
                         if (item?.eventId) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId)); }
 
-                        const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
-                        const id = existingOverride?.id || makeId("o");
+                        // 해당 슬롯의 모든 Override를 삭제하여 깨끗하게 비움
+                        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
+                        if (existingOverrides.length > 0) {
+                            existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+                        }
+                        
+                        const id = makeId("o");
                         batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: "" });
                     });
                     await batch.commit(); setSelectedCells([]);
@@ -561,38 +565,44 @@
                 try {
                     const batch = writeBatch(db);
                     currentSelected.forEach(cell => {
-                        const { date, period } = cell; const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
+                        const { date, period } = cell; 
+                        // 해당 칸의 모든 기존 Override 제거 (중복 방지)
+                        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
+                        existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+
                         const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
                         const preservedClass = currentItem?.className || EMPTY_SLOT;
                         const finalClass = currentSelected.length > 1 ? preservedClass : (classToSave || EMPTY_SLOT);
-                        const id = existingOverride?.id || makeId("o");
+                        const id = makeId("o");
                         batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() });
                     });
                     await batch.commit();
                 } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
             };
 
-            // [수정: 드래그 시 데이터 사라짐/중복 방지] 새로운 ID를 계속 생성하지 않고 기존 ID를 재활용합니다.
+            // [수정: 드래그 시 데이터 복제/사라짐 완전 해결]
             const handleDrop = async (e, targetDate, targetPeriod) => {
-                e.preventDefault();
-                if (!user || user.isAnonymous || !dragSource || !db) return;
+                e.preventDefault(); setDragOverCell(null);
+                if (!user || !user.uid || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                pushHistory(); 
                 
+                pushHistory(); 
                 const batch = writeBatch(db);
                 
-                // 타겟 위치의 기존 ID 찾기
-                const existingTarget = overrides.find(o => o.date === targetDate && o.newPeriod === targetPeriod);
-                const targetId = existingTarget?.id || makeId("o");
+                // 1. 타겟 위치 정리 및 저장
+                const existingTargets = overrides.filter(o => o.date === targetDate && o.newPeriod === targetPeriod);
+                existingTargets.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
                 
+                const targetId = makeId("o");
                 batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), {
                     id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label
                 });
                 
-                // 소스 위치의 기존 ID 찾기 및 비우기
-                const existingSource = overrides.find(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
-                const sourceId = existingSource?.id || makeId("o");
+                // 2. 출발지 위치 정리 및 비우기
+                const existingSources = overrides.filter(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
+                existingSources.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
                 
+                const sourceId = makeId("o");
                 batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), {
                     id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: ""
                 });

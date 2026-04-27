@@ -93,11 +93,7 @@
         };
 
         const MessageBox = ({ message, onClose }) => (
-            <div 
-                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center focus:outline-none" 
-                onKeyDown={(e) => { if (e.key === 'Enter') onClose(); }} 
-                tabIndex="0"
-            >
+            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') onClose(); }} tabIndex="0">
                 <Card className="max-w-md w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 mb-4"><Icon name="info" className="text-sky-500" /></div>
                     <p className="text-slate-600 font-bold mb-6 whitespace-pre-wrap text-sm leading-relaxed">{message}</p>
@@ -107,11 +103,7 @@
         );
 
         const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
-            <div 
-                className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center focus:outline-none"
-                onKeyDown={(e) => { if (e.key === 'Enter') onConfirm(); else if (e.key === 'Escape') onCancel(); }}
-                tabIndex="0"
-            >
+            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') onConfirm(); else if (e.key === 'Escape') onCancel(); }} tabIndex="0">
                 <Card className="max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl border-rose-100">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 mb-4"><Icon name="alert-triangle" className="text-rose-500" /></div>
                     <h3 className="text-lg font-black text-slate-800 mb-2">{title}</h3>
@@ -273,6 +265,7 @@
                 if (window.lucide) window.lucide.createIcons(); 
             }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides, weekBaseDate]);
 
+            // [수정: 시수 중복 계산 방지] Map을 활용하여 날짜별 교시의 고유성을 보장합니다.
             const countRemaining = useCallback((targetClassName) => {
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const myGrade = getGrade(targetClassName);
@@ -282,19 +275,28 @@
                 while (d < end) {
                     const iso = getLocalIsoString(d); const dayName = WEEKDAY_BY_DAY[d.getDay()];
                     if (WEEKDAYS_MAP.includes(dayName)) {
+                        // 중복된 override 문서를 방지하기 위해 Map 사용
                         const dailyOverrides = overrides.filter(o => o.date === iso);
+                        const overrideMap = new Map();
+                        dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
+
                         const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
+                        let dailyCount = 0;
                         periodsForClassInBase.forEach(p => {
                             const hasEventAtPeriod = events.some(e => e.date === iso && (e.period === p || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
                             if (hasEventAtPeriod) return;
-                            const override = dailyOverrides.find(o => o.newPeriod === p);
-                            if (override) { if (override.newClassName === targetClassName) count++; } else { count++; }
+                            
+                            const override = overrideMap.get(p);
+                            if (override) { if (override.newClassName === targetClassName) dailyCount++; } else { dailyCount++; }
                         });
-                        const trulyAdded = dailyOverrides.filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod));
-                        trulyAdded.forEach(o => {
+                        
+                        // 추가된 수업 계산 (고유 Map 사용)
+                        const trulyAddedCount = Array.from(overrideMap.values()).filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod)).filter(o => {
                              const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
-                            if (!hasEventAtOverridePeriod) count++;
-                        });
+                             return !hasEventAtOverridePeriod;
+                        }).length;
+
+                        count += (dailyCount + trulyAddedCount);
                     }
                     d.setDate(d.getDate() + 1);
                 }
@@ -366,14 +368,19 @@
                 } catch (err) { console.error(err); }
             }, [history, user, db]);
 
+            // [수정: 데이터 사라짐 방지] 화면 출력 시에도 고유 Map을 사용하여 중복 데이터를 한 번만 렌더링합니다.
             const getScheduleForDate = useCallback((date) => {
                 const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
                 if (!WEEKDAYS_MAP.includes(dayName)) return [];
                 const dayEvents = events.filter(e => e.date === iso);
                 const dailyOverrides = overrides.filter(o => o.date === iso);
+                
+                const overrideMap = new Map();
+                dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
+
                 const baseWeek = weekly.filter(w => w.weekday === dayName);
                 return PERIODS.map(period => {
-                    const override = dailyOverrides.find(o => o.newPeriod === period);
+                    const override = overrideMap.get(period);
                     const base = baseWeek.find(w => w.period === period);
                     let className = EMPTY_SLOT; let source = "none"; let customLabel = ""; let isClassChanged = false;
                     if (override) { className = override.newClassName; customLabel = override.customLabel; source = "override"; isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT)); }
@@ -386,7 +393,6 @@
                 });
             }, [events, overrides, weekly]);
 
-            // [추가 기능 1] 선택된 셀 삭제 로직
             const handleDeleteSelected = useCallback(async () => {
                 if (!user || selectedCells.length === 0 || !db) return;
                 pushHistory();
@@ -398,39 +404,21 @@
                         const currentDataList = getScheduleForDate(dObj);
                         const item = currentDataList.find(d => d.period === period);
 
-                        // 1. 이벤트 삭제 (행사, 시험, 휴일 등)
-                        if (item?.eventId) {
-                            batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId));
-                        }
+                        if (item?.eventId) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId)); }
 
-                        // 2. 시간표 덮어쓰기 해제 (수업 없음으로 변경)
                         const existingOverride = overrides.find(o => o.date === date && o.newPeriod === period);
                         const id = existingOverride?.id || makeId("o");
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), {
-                            id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: ""
-                        });
+                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: "" });
                     });
-                    await batch.commit();
-                    setSelectedCells([]);
+                    await batch.commit(); setSelectedCells([]);
                 } catch (err) { console.error(err); }
             }, [user, db, selectedCells, overrides, pushHistory, getScheduleForDate]);
 
             useEffect(() => {
                 const handleGlobalKeyDown = (e) => { 
-                    // Ctrl+Z: 취소
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { 
-                        e.preventDefault(); 
-                        undo(); 
-                    } 
-                    // Ctrl+X: 시수 동기화
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
-                        e.preventDefault();
-                        refreshRemaining();
-                    }
-                    // [추가 기능 1] Delete 키로 삭제
-                    if (e.key === 'Delete') {
-                        handleDeleteSelected();
-                    }
+                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); } 
+                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); refreshRemaining(); }
+                    if (e.key === 'Delete') { handleDeleteSelected(); }
                 };
                 window.addEventListener('keydown', handleGlobalKeyDown);
                 return () => window.removeEventListener('keydown', handleGlobalKeyDown);
@@ -546,7 +534,7 @@
                 } catch (err) { console.error(err); }
             };
 
-            const handleCellClick = (e, date, period, item) => {
+            const handleCellClick = (e, date, period, currentClass, currentLabel) => {
                 const iso = getLocalIsoString(date); const clickedCell = { date: iso, period };
                 let newSelection = [];
                 if (e.ctrlKey || e.metaKey) {
@@ -563,7 +551,7 @@
                         range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c)); newSelection = Array.from(selectionMap.values());
                     }
                 } else { newSelection = [clickedCell]; }
-                setSelectedCells(newSelection); setEditingCell(clickedCell); setCellDraftClass(item?.className || EMPTY_SLOT); setCellDraftLabel(item?.customLabel || "");
+                setSelectedCells(newSelection); setEditingCell(clickedCell); setCellDraftClass(currentClass || EMPTY_SLOT); setCellDraftLabel(currentLabel || "");
             };
 
             const saveCellEdit = async () => {
@@ -584,13 +572,31 @@
                 } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
             };
 
+            // [수정: 드래그 시 데이터 사라짐/중복 방지] 새로운 ID를 계속 생성하지 않고 기존 ID를 재활용합니다.
             const handleDrop = async (e, targetDate, targetPeriod) => {
-                e.preventDefault(); setDragOverCell(null);
-                if (!user || !user.uid || !dragSource || !db) return;
+                e.preventDefault();
+                if (!user || user.isAnonymous || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                pushHistory(); const batch = writeBatch(db);
-                const targetId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
-                const sourceId = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
+                pushHistory(); 
+                
+                const batch = writeBatch(db);
+                
+                // 타겟 위치의 기존 ID 찾기
+                const existingTarget = overrides.find(o => o.date === targetDate && o.newPeriod === targetPeriod);
+                const targetId = existingTarget?.id || makeId("o");
+                
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), {
+                    id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label
+                });
+                
+                // 소스 위치의 기존 ID 찾기 및 비우기
+                const existingSource = overrides.find(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
+                const sourceId = existingSource?.id || makeId("o");
+                
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), {
+                    id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: ""
+                });
+                
                 await batch.commit(); setDragSource(null);
             };
 
@@ -601,7 +607,7 @@
                 setModalMsg("클라우드 저장 완료!");
             };
 
-            const selectedClass = useMemo(() => classes.find(c => c.id === selectedClassId), [classes, selectedClassId]);
+            const selectedClass = classes.find(c => c.id === selectedClassId);
 
             if (isInitialLoading) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 및 정보 복구 중...</p> </div> ); }
 
@@ -610,15 +616,14 @@
                     {modalMsg && <MessageBox message={modalMsg} onClose={() => setModalMsg("")} />}
                     {confirmModal && <ConfirmModal {...confirmModal} />}
 
-                    {/* 사이드바 */}
                     <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
                         <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
                         <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
                         
                         <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
-                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록 (드래그하여 순서 변경)</p> 
-                            {classes.length > 0 ? classes.map((c, index) => ( 
-                                <div key={c.id} draggable={true} onDragStart={(e) => { e.dataTransfer.setData("classIndex", index); e.currentTarget.classList.add("sidebar-dragging"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("sidebar-dragging"); }} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const fromIndex = parseInt(e.dataTransfer.getData("classIndex")); const toIndex = index; if (fromIndex !== toIndex) handleClassReorder(fromIndex, toIndex); }} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
+                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록</p> 
+                            {classes.length > 0 ? classes.map((c) => ( 
+                                <div key={c.id} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
                                     <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
                                         <div className="flex flex-col"><span>{shortClass(c.name)}</span><span className={`text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`}>{c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle}</span></div> 
                                         <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
@@ -651,7 +656,7 @@
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             <div className="max-w-[1600px] mx-auto space-y-6">
                                 <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. 변경 시 자동 저장됩니다. [Delete]로 삭제.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. [Delete]로 삭제.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
                                     
                                     <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                         <div className="flex min-w-max">
@@ -666,7 +671,7 @@
                                                         else if (item.eventType === '휴업') { colorClass = "bg-rose-100 border-rose-400 text-rose-900"; } 
                                                         else { colorClass = "bg-emerald-100 border-emerald-400 text-emerald-900"; }
                                                     } else { colorClass = getColorForText(item?.customLabel || item?.lessonTitle); }
-                                                    return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
+                                                    return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item?.className, item?.customLabel)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
                                                         {item?.isEventMode ? ( <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center"> <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> <div className="pointer-events-none"> <p className="text-[8px] font-black uppercase opacity-60 mb-1 leading-none">{item.eventType}</p> <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p> </div> </div> ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : ( <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"> {item?.hasAnyEvent && ( <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> )} {item?.className !== EMPTY_SLOT && ( <span className="font-black text-sm tracking-tighter leading-none pointer-events-none"> {shortClass(item?.className)} {item?.isClassChanged && <span className="text-[8px] text-amber-600 ml-1 font-bold">(수정)</span>} </span> )} {item?.className === EMPTY_SLOT && item?.hasAnyEvent && ( <p className="text-[10px] font-black leading-tight break-all line-clamp-3 text-center pointer-events-none">{item.eventTitle}</p> )} {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && ( <span className={`text-[10px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}> {item.isChangche ? '창체' : (item.eventTitle.length > 5 ? item.eventTitle.slice(0,5)+'..' : item.eventTitle)} </span> )} {item?.customLabel && (<span className="text-[9px] font-bold mt-1 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)} {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>} </div> )}</div></div>);
                                                 })}</div>);
                                             })}
@@ -680,9 +685,9 @@
                                         <div className="grid lg:grid-cols-2 gap-10"> 
                                             <div className="space-y-5"> 
                                                 <div className="bg-slate-50 p-5 rounded-[24px] border border-slate-100 shadow-inner"><div className="flex items-center justify-between"><div className="flex flex-col"><p className="text-[9px] font-black text-slate-400 mb-1 uppercase">선택 학급</p><span className="text-2xl font-black text-slate-800">{shortClass(selectedClass.name)}</span></div><div className="flex flex-col items-end"><span className="text-[10px] font-bold text-slate-400 mb-1">시험까지 남은 수업</span><span className="bg-sky-500 px-3 py-1 rounded-full text-[11px] font-black text-white shadow-lg">{selectedClass.remainingBeforeExam}회</span></div></div></div> 
-                                                <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">현재 진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
+                                                <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">현재 진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClass.id ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
                                             </div> 
-                                            <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 특이사항 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClassId ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
+                                            <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 특이사항 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClass.id ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
                                         </div> 
                                         <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>진도 저장하기</Button></div> 
                                     </Card> 

@@ -30,12 +30,21 @@
         
         .sidebar-dragging { opacity: 0.5; background-color: #f1f5f9; border: 2px dashed #cbd5e1; }
         
-        .timetable-scroll-area { position: relative; max-height: calc(100vh - 240px); overflow: auto; border-radius: 24px; background: #ffffff; scroll-behavior: smooth; }
+        /* 1~7교시 한 화면 보기 최적화 및 강제 스무스 스크롤 제거 (세밀한 조절을 위함) */
+        .timetable-scroll-area { 
+            position: relative; 
+            max-height: calc(100vh - 240px); 
+            overflow-x: auto;
+            overflow-y: hidden;
+            border-radius: 24px; 
+            background: #ffffff; 
+            /* scroll-behavior: smooth; 를 제거하여 휠 움직임에 즉각 반응하게 함 */
+        }
         .sticky-top { position: sticky; top: 0; z-index: 40; background: #ffffff; }
         .sticky-left-col { position: sticky; left: 0; z-index: 45; background: #ffffff; box-shadow: 4px 0 10px rgba(0,0,0,0.05); }
         .sticky-corner { position: sticky; top: 0; left: 0; z-index: 55; background: #f8fafc; border-right: 1px solid #e2e8f0; }
 
-        .timetable-column { min-width: 180px; flex-shrink: 0; }
+        .timetable-column { min-width: 170px; flex-shrink: 0; }
         .selected-cell { outline: 3px solid #0ea5e9; outline-offset: -3px; z-index: 10; }
         .today-column { background-color: #f0f9ff/50 !important; }
         .today-header { background-color: #0ea5e9 !important; color: white !important; }
@@ -54,7 +63,6 @@
 
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
-        // --- 전역 설정 및 초기화 ---
         const firebaseConfig = {
             apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
             authDomain: "moon-pixel.firebaseapp.com",
@@ -70,7 +78,6 @@
         const auth = getAuth(app);
         const db = initializeFirestore(app, { localCache: persistentLocalCache() });
 
-        // --- 상수 ---
         const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
         const PERIODS = Array.from({ length: 7 }, (_, i) => `${i + 1}교시`);
         const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
@@ -181,22 +188,36 @@
             const eventFileRef = useRef(null);
             const scrollContainerRef = useRef(null);
 
-            // [수정: 1년치 날짜 생성 로직]
             const academicYearDays = useMemo(() => {
                 const days = [];
-                let current = new Date("2026-03-02"); // 2026학년도 시작일 부근 (월요일)
-                const end = new Date("2027-02-28");   // 2026학년도 종료일
+                let current = new Date("2026-03-02"); 
+                const end = new Date("2027-02-28");   
                 while (current <= end) {
                     const day = current.getDay();
-                    if (day !== 0 && day !== 6) { // 주말 제외
-                        days.push(new Date(current));
-                    }
+                    if (day !== 0 && day !== 6) { days.push(new Date(current)); }
                     current.setDate(current.getDate() + 1);
                 }
                 return days;
             }, []);
 
-            // [오늘 날짜로 스크롤 이동]
+            // [개선: 스마트 휠 스크롤 감도 최적화]
+            useEffect(() => {
+                const container = scrollContainerRef.current;
+                if (!container) return;
+
+                const handleWheel = (e) => {
+                    if (e.deltaY !== 0) {
+                        e.preventDefault();
+                        // 감도를 -2.2로 조정하여 부드러우면서도 빠르게, 그리고 딱 멈추고 싶은 지점에 멈추도록 개선
+                        const scrollAmount = e.deltaY * -2.2; 
+                        container.scrollLeft += scrollAmount;
+                    }
+                };
+
+                container.addEventListener('wheel', handleWheel, { passive: false });
+                return () => container.removeEventListener('wheel', handleWheel);
+            }, [isInitialLoading]);
+
             useEffect(() => {
                 if (!isInitialLoading && scrollContainerRef.current) {
                     const todayStr = getLocalIsoString(new Date());
@@ -521,18 +542,6 @@
                 pushHistory(); try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
             };
 
-            const handleClassReorder = async (fromIndex, toIndex) => {
-                if (!user || !user.uid || !db) return;
-                const newClasses = [...classes]; const [movedItem] = newClasses.splice(fromIndex, 1);
-                newClasses.splice(toIndex, 0, movedItem); const updatedWithOrder = newClasses.map((c, i) => ({ ...c, orderIndex: i }));
-                setClasses(updatedWithOrder);
-                try {
-                    const batch = writeBatch(db);
-                    updatedWithOrder.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { orderIndex: c.orderIndex }); });
-                    await batch.commit();
-                } catch (err) { console.error(err); }
-            };
-
             const handleCellClick = (e, date, period, currentClass, currentLabel) => {
                 const iso = getLocalIsoString(date); const clickedCell = { date: iso, period };
                 let newSelection = [];
@@ -629,11 +638,6 @@
                                 <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
                                 <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드</Button> 
                                 <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
-                                
-                                <div className="h-px bg-slate-100 my-2"></div>
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-2 mb-1">데이터 관리</p>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "진도 내용 및 시간표 복구", message: "모든 학급의 진도명, 메모를 삭제하고\n수정했던 시간표 배치를 원본 상태로 돌리시겠습니까?", onConfirm: handleLessonReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-amber-600 hover:bg-amber-50"><Icon name="trash" size={12} className="mr-2"/>진도 내용만 삭제</Button>
-                                <Button variant="ghost" onClick={() => setConfirmModal({ title: "학기 전체 초기화", message: "모든 시간표, 학사일정, 기록이 완전히 삭제됩니다.\n이 작업은 취소할 수 없습니다. 정말 진행할까요?", onConfirm: handleFullReset, onCancel: () => setConfirmModal(null) })} className="w-full text-[10px] py-2 rounded-xl text-rose-500 hover:bg-rose-50"><Icon name="alert-triangle" size={12} className="mr-2"/>학기 전체 리셋</Button>
                             </div> 
                         )}
                     </div>
@@ -647,11 +651,11 @@
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             <div className="max-w-full mx-auto space-y-6">
                                 <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">가로로 스크롤하여 1년 일정을 확인하세요. [오늘] 날짜로 자동 이동됩니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
+                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">시간표 위에서 휠을 돌리면 가로로 이동합니다. (위: 미래 / 아래: 과거)</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
                                     
                                     <div ref={scrollContainerRef} className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                         <div className="flex min-w-max">
-                                            <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-24 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
+                                            <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-20 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
                                             {academicYearDays.map((day, dIdx) => {
                                                 const data = getScheduleForDate(day); const dIso = getLocalIsoString(day); const isToday = dIso === todayStr;
                                                 return (<div key={day.toString()} id={`col-${dIso}`} className={`timetable-column border-r border-slate-50 ${isToday ? "today-column shadow-[inset_0_0_20px_rgba(14,165,233,0.05)]" : ""}`}><div className={`h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm ${isToday ? "today-header" : "bg-white/90 backdrop-blur-md"}`}><span className={`block text-base font-black leading-none ${isToday ? "text-white" : (day.getDay() === 1 ? "text-sky-600" : "text-slate-700")}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className={`text-[10px] font-bold mt-1 block ${isToday ? "text-white/80" : "text-slate-400"}`}>{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
@@ -662,8 +666,8 @@
                                                         else if (item.eventType === '휴업') { colorClass = "bg-rose-100 border-rose-400 text-rose-900"; } 
                                                         else { colorClass = "bg-emerald-100 border-emerald-400 text-emerald-900"; }
                                                     } else { colorClass = getColorForText(item?.customLabel || item?.lessonTitle); }
-                                                    return (<div key={period} className={`h-24 p-1.5 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item?.className, item?.customLabel)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
-                                                        {item?.isEventMode ? ( <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center"> <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> <div className="pointer-events-none"> <p className="text-[8px] font-black uppercase opacity-60 mb-1 leading-none">{item.eventType}</p> <p className="text-[10px] font-black leading-tight break-all line-clamp-3">{item.eventTitle}</p> </div> </div> ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[10px] p-1.5 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[10px] p-1.5 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1.5"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[10px] font-black py-1.5 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black py-1.5">취소</button></div></div>) : ( <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"> {item?.hasAnyEvent && ( <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> )} {item?.className !== EMPTY_SLOT && ( <span className="font-black text-sm tracking-tighter leading-none pointer-events-none"> {shortClass(item?.className)} {item?.isClassChanged && <span className="text-[8px] text-amber-600 ml-1 font-bold">(수정)</span>} </span> )} {item?.className === EMPTY_SLOT && item?.hasAnyEvent && ( <p className="text-[10px] font-black leading-tight break-all line-clamp-3 text-center pointer-events-none">{item.eventTitle}</p> )} {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && ( <span className={`text-[10px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}> {item.isChangche ? '창체' : (item.eventTitle.length > 5 ? item.eventTitle.slice(0,5)+'..' : item.eventTitle)} </span> )} {item?.customLabel && (<span className="text-[9px] font-bold mt-1 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)} {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>} </div> )}</div></div>);
+                                                    return (<div key={period} className={`h-20 p-1 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item?.className, item?.customLabel)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
+                                                        {item?.isEventMode ? ( <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center"> <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> <div className="pointer-events-none"> <p className="text-[8px] font-black uppercase opacity-60 mb-0.5 leading-none">{item.eventType}</p> <p className="text-[9px] font-black leading-tight break-all line-clamp-2">{item.eventTitle}</p> </div> </div> ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[9px] p-1 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[9px] p-1 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[9px] font-black py-1 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-black py-1">취소</button></div></div>) : ( <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"> {item?.hasAnyEvent && ( <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> )} {item?.className !== EMPTY_SLOT && ( <span className="font-black text-[13px] tracking-tighter leading-none pointer-events-none"> {shortClass(item?.className)} {item?.isClassChanged && <span className="text-[7px] text-amber-600 ml-0.5 font-bold">(수)</span>} </span> )} {item?.className === EMPTY_SLOT && item?.hasAnyEvent && ( <p className="text-[9px] font-black leading-tight break-all line-clamp-2 text-center pointer-events-none">{item.eventTitle}</p> )} {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && ( <span className={`text-[8px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}> {item.isChangche ? '창체' : (item.eventTitle.length > 4 ? item.eventTitle.slice(0,4)+'..' : item.eventTitle)} </span> )} {item?.customLabel && (<span className="text-[8px] font-bold mt-0.5 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)} {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>} </div> )}</div></div>);
                                                 })}</div>);
                                             })}
                                         </div>

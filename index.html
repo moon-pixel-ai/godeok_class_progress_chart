@@ -30,13 +30,15 @@
         
         .sidebar-dragging { opacity: 0.5; background-color: #f1f5f9; border: 2px dashed #cbd5e1; }
         
-        .timetable-scroll-area { position: relative; max-height: calc(100vh - 240px); overflow: auto; border-radius: 24px; background: #ffffff; }
+        .timetable-scroll-area { position: relative; max-height: calc(100vh - 240px); overflow: auto; border-radius: 24px; background: #ffffff; scroll-behavior: smooth; }
         .sticky-top { position: sticky; top: 0; z-index: 40; background: #ffffff; }
         .sticky-left-col { position: sticky; left: 0; z-index: 45; background: #ffffff; box-shadow: 4px 0 10px rgba(0,0,0,0.05); }
         .sticky-corner { position: sticky; top: 0; left: 0; z-index: 55; background: #f8fafc; border-right: 1px solid #e2e8f0; }
 
         .timetable-column { min-width: 180px; flex-shrink: 0; }
         .selected-cell { outline: 3px solid #0ea5e9; outline-offset: -3px; z-index: 10; }
+        .today-column { background-color: #f0f9ff/50 !important; }
+        .today-header { background-color: #0ea5e9 !important; color: white !important; }
 
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
@@ -177,43 +179,54 @@
 
             const scheduleFileRef = useRef(null);
             const eventFileRef = useRef(null);
+            const scrollContainerRef = useRef(null);
 
-            const currentWeekDays = useMemo(() => {
-                const start = new Date(weekBaseDate);
-                const day = start.getDay();
-                const diffToMonday = day === 0 ? -6 : 1 - day;
-                start.setDate(start.getDate() + diffToMonday);
-                start.setHours(0, 0, 0, 0);
+            // [수정: 1년치 날짜 생성 로직]
+            const academicYearDays = useMemo(() => {
                 const days = [];
-                let current = new Date(start);
-                while (days.length < 10) {
-                    if (current.getDay() !== 0 && current.getDay() !== 6) days.push(new Date(current));
+                let current = new Date("2026-03-02"); // 2026학년도 시작일 부근 (월요일)
+                const end = new Date("2027-02-28");   // 2026학년도 종료일
+                while (current <= end) {
+                    const day = current.getDay();
+                    if (day !== 0 && day !== 6) { // 주말 제외
+                        days.push(new Date(current));
+                    }
                     current.setDate(current.getDate() + 1);
                 }
                 return days;
-            }, [weekBaseDate]);
+            }, []);
+
+            // [오늘 날짜로 스크롤 이동]
+            useEffect(() => {
+                if (!isInitialLoading && scrollContainerRef.current) {
+                    const todayStr = getLocalIsoString(new Date());
+                    setTimeout(() => {
+                        const todayElement = document.getElementById(`col-${todayStr}`);
+                        if (todayElement && scrollContainerRef.current) {
+                            const container = scrollContainerRef.current;
+                            const leftPos = todayElement.offsetLeft - (container.clientWidth / 2) + (todayElement.clientWidth / 2);
+                            container.scrollTo({ left: leftPos, behavior: 'auto' });
+                        }
+                    }, 500);
+                }
+            }, [isInitialLoading]);
 
             useEffect(() => {
                 setIsAuthChecking(true);
                 let unsubscribes = [];
-
                 const authUnsubscribe = onAuthStateChanged(auth, (currentUser) => {
                     setUser(currentUser);
                     setIsAuthChecking(false);
-
                     unsubscribes.forEach(un => un());
                     unsubscribes = [];
-
                     if (currentUser) {
                         setIsInitialLoading(true);
                         let loadedCount = 0;
                         const colNames = ['classes', 'weekly', 'events', 'overrides'];
-
                         colNames.forEach(name => {
                             const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', currentUser.uid, name)),
                             (snapshot) => {
                                 const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
                                 if (name === 'classes') {
                                     const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
                                     setClasses(sorted);
@@ -221,7 +234,6 @@
                                 } else if (name === 'weekly') setWeekly(data);
                                 else if (name === 'events') setEvents(data);
                                 else if (name === 'overrides') setOverrides(data);
-
                                 loadedCount++;
                                 if (loadedCount >= colNames.length) setIsInitialLoading(false);
                             },
@@ -236,7 +248,6 @@
                         setIsInitialLoading(false);
                     }
                 });
-
                 return () => {
                     authUnsubscribe();
                     unsubscribes.forEach(un => un());
@@ -263,9 +274,8 @@
 
             useEffect(() => { 
                 if (window.lucide) window.lucide.createIcons(); 
-            }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides, weekBaseDate]);
+            }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
 
-            // [수정: 시수 중복 계산 방지] Map을 활용하여 날짜별 교시의 고유성을 보장하며 중복 데이터를 원천 배제합니다.
             const countRemaining = useCallback((targetClassName) => {
                 const today = new Date(); today.setHours(0, 0, 0, 0);
                 const myGrade = getGrade(targetClassName);
@@ -277,24 +287,19 @@
                     if (WEEKDAYS_MAP.includes(dayName)) {
                         const dailyOverrides = overrides.filter(o => o.date === iso);
                         const overrideMap = new Map();
-                        // 동일한 시간대의 Override는 단 하나만 인정
                         dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
-
                         const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
                         let dailyCount = 0;
                         periodsForClassInBase.forEach(p => {
                             const hasEventAtPeriod = events.some(e => e.date === iso && (e.period === p || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
                             if (hasEventAtPeriod) return;
-                            
                             const override = overrideMap.get(p);
                             if (override) { if (override.newClassName === targetClassName) dailyCount++; } else { dailyCount++; }
                         });
-                        
                         const trulyAddedCount = Array.from(overrideMap.values()).filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod)).filter(o => {
                              const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
                              return !hasEventAtOverridePeriod;
                         }).length;
-
                         count += (dailyCount + trulyAddedCount);
                     }
                     d.setDate(d.getDate() + 1);
@@ -316,10 +321,10 @@
                     const batch = writeBatch(db);
                     const targets = ['weekly', 'events', 'overrides'];
                     for (const name of targets) {
-                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', currentUser.uid, name));
+                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
                         snap.docs.forEach(d => batch.delete(d.ref));
                     }
-                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', currentUser.uid, 'classes'));
+                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
                     classSnap.docs.forEach(d => batch.delete(d.ref));
                     await batch.commit();
                     setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
@@ -367,16 +372,13 @@
                 } catch (err) { console.error(err); }
             }, [history, user, db]);
 
-            // [수정: 중복 데이터 화면 출력 방지] Map을 통해 고유 슬롯당 하나의 데이터만 출력합니다.
             const getScheduleForDate = useCallback((date) => {
                 const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
                 if (!WEEKDAYS_MAP.includes(dayName)) return [];
                 const dayEvents = events.filter(e => e.date === iso);
                 const dailyOverrides = overrides.filter(o => o.date === iso);
-                
                 const overrideMap = new Map();
                 dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
-
                 const baseWeek = weekly.filter(w => w.weekday === dayName);
                 return PERIODS.map(period => {
                     const override = overrideMap.get(period);
@@ -402,17 +404,10 @@
                         const dObj = getSafeDate(date);
                         const currentDataList = getScheduleForDate(dObj);
                         const item = currentDataList.find(d => d.period === period);
-
                         if (item?.eventId) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId)); }
-
-                        // 해당 슬롯의 모든 Override를 삭제하여 깨끗하게 비움
                         const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
-                        if (existingOverrides.length > 0) {
-                            existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                        }
-                        
-                        const id = makeId("o");
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: "" });
+                        if (existingOverrides.length > 0) { existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id))); }
+                        const id = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: "" });
                     });
                     await batch.commit(); setSelectedCells([]);
                 } catch (err) { console.error(err); }
@@ -546,7 +541,7 @@
                     if (isSelected) { newSelection = selectedCells.filter(c => !(c.date === iso && c.period === period)); } else { newSelection = [...selectedCells, clickedCell]; }
                 } else if (e.shiftKey && selectedCells.length > 0) {
                     const lastSelected = selectedCells[selectedCells.length - 1]; const allCells = [];
-                    currentWeekDays.forEach(d => { const dIso = getLocalIsoString(d); PERIODS.forEach(p => allCells.push({ date: dIso, period: p })); });
+                    academicYearDays.forEach(d => { const dIso = getLocalIsoString(d); PERIODS.forEach(p => allCells.push({ date: dIso, period: p })); });
                     const startIdx = allCells.findIndex(c => c.date === lastSelected.date && c.period === lastSelected.period);
                     const endIdx = allCells.findIndex(c => c.date === iso && c.period === period);
                     if (startIdx !== -1 && endIdx !== -1) {
@@ -566,10 +561,8 @@
                     const batch = writeBatch(db);
                     currentSelected.forEach(cell => {
                         const { date, period } = cell; 
-                        // 해당 칸의 모든 기존 Override 제거 (중복 방지)
                         const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
                         existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-
                         const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
                         const preservedClass = currentItem?.className || EMPTY_SLOT;
                         const finalClass = currentSelected.length > 1 ? preservedClass : (classToSave || EMPTY_SLOT);
@@ -580,33 +573,20 @@
                 } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
             };
 
-            // [수정: 드래그 시 데이터 복제/사라짐 완전 해결]
             const handleDrop = async (e, targetDate, targetPeriod) => {
                 e.preventDefault(); setDragOverCell(null);
                 if (!user || !user.uid || !dragSource || !db) return;
                 if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                
                 pushHistory(); 
                 const batch = writeBatch(db);
-                
-                // 1. 타겟 위치 정리 및 저장
                 const existingTargets = overrides.filter(o => o.date === targetDate && o.newPeriod === targetPeriod);
                 existingTargets.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                
                 const targetId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), {
-                    id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label
-                });
-                
-                // 2. 출발지 위치 정리 및 비우기
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
                 const existingSources = overrides.filter(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
                 existingSources.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                
                 const sourceId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), {
-                    id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: ""
-                });
-                
+                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
                 await batch.commit(); setDragSource(null);
             };
 
@@ -618,6 +598,7 @@
             };
 
             const selectedClass = classes.find(c => c.id === selectedClassId);
+            const todayStr = getLocalIsoString(new Date());
 
             if (isInitialLoading) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 및 정보 복구 중...</p> </div> ); }
 
@@ -664,16 +645,16 @@
                         </header>
 
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            <div className="max-w-[1600px] mx-auto space-y-6">
+                            <div className="max-w-full mx-auto space-y-6">
                                 <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">주간 진도 플래너 (2주 보기)</h2><p className="text-xs font-bold text-slate-400 mt-1">드래그하여 배치를 변경할 수 있습니다. [Delete]로 삭제.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() - (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-left" /></button> <div className="px-6 text-sm font-black text-slate-600 whitespace-nowrap min-w-[220px] text-center">{toKoreanDate(getLocalIsoString(currentWeekDays[0]))} ~ {toKoreanDate(getLocalIsoString(currentWeekDays[currentWeekDays.length-1]))}</div> <button onClick={() => setWeekBaseDate(new Date(weekBaseDate.getTime() + (7 * 24 * 60 * 60 * 1000)))} className="p-2 hover:bg-white rounded-xl transition-all shadow-none hover:shadow-sm"><Icon name="chevron-right" /></button> </div> </div>
+                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">가로로 스크롤하여 1년 일정을 확인하세요. [오늘] 날짜로 자동 이동됩니다.</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
                                     
-                                    <div className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
+                                    <div ref={scrollContainerRef} className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                         <div className="flex min-w-max">
                                             <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-24 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
-                                            {currentWeekDays.map((day, dIdx) => {
-                                                const data = getScheduleForDate(day); const dIso = getLocalIsoString(day);
-                                                return (<div key={day.toString()} className={`timetable-column border-r border-slate-50 ${dIdx >= 5 ? "bg-slate-50/20" : ""}`}><div className="h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm bg-white/90 backdrop-blur-md"><span className={`block text-base font-black leading-none ${day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className="text-[10px] font-bold text-slate-400 mt-1 block">{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
+                                            {academicYearDays.map((day, dIdx) => {
+                                                const data = getScheduleForDate(day); const dIso = getLocalIsoString(day); const isToday = dIso === todayStr;
+                                                return (<div key={day.toString()} id={`col-${dIso}`} className={`timetable-column border-r border-slate-50 ${isToday ? "today-column shadow-[inset_0_0_20px_rgba(14,165,233,0.05)]" : ""}`}><div className={`h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm ${isToday ? "today-header" : "bg-white/90 backdrop-blur-md"}`}><span className={`block text-base font-black leading-none ${isToday ? "text-white" : (day.getDay() === 1 ? "text-sky-600" : "text-slate-700")}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className={`text-[10px] font-bold mt-1 block ${isToday ? "text-white/80" : "text-slate-400"}`}>{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
                                                     const item = data.find(d => d.period === period); const isEditing = editingCell?.date === dIso && editingCell?.period === period; const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
                                                     let colorClass = "";
                                                     if (item?.hasAnyEvent) {
@@ -725,10 +706,10 @@
                                             </div>
                                         </div>
                                         <div className="lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden">
-                                            <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 주간 학사 일정 리스트</p>
+                                            <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 전체 학사 일정 리스트</p>
                                             <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                                {events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).length > 0 ? (
-                                                    events.filter(e => { const ed = getSafeDate(e.date); return ed >= currentWeekDays[0] && ed <= currentWeekDays[currentWeekDays.length-1]; }).sort((a,b) => a.date.localeCompare(b.date)).map(e => (
+                                                {events.length > 0 ? (
+                                                    events.sort((a,b) => a.date.localeCompare(b.date)).map(e => (
                                                         <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
                                                             <div className="flex flex-col gap-1"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-xs font-bold text-slate-700">{e.title} {e.period && e.period !== '전교시' && `(${e.period.replace('교시','')})`}</span></div>
                                                             <button type="button" onClick={(ev) => { ev.stopPropagation(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash-2" size={14}/></button>

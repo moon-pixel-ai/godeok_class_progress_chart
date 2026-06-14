@@ -35,10 +35,16 @@
             position: relative; 
             max-height: calc(100vh - 240px); 
             overflow-x: auto;
-            overflow-y: hidden;
+            /* [개선] 화면이 매우 작아 7교시가 다 안 들어갈 때만 세로 터치 스크롤 허용 */
+            overflow-y: auto;
             border-radius: 24px; 
             background: #ffffff; 
             /* scroll-behavior: smooth; 를 제거하여 휠 움직임에 즉각 반응하게 함 */
+        }
+        /* [개선] 교시(행) 높이를 화면 높이에 맞춰 자동 축소 → 어떤 모니터·노트북에서도 1~7교시가 한눈에 들어오도록 함.
+           큰 화면에서는 기존과 동일한 80px를 유지하고, 화면이 낮아질수록 최소 40px까지 줄어듦. */
+        .timetable-scroll-area .h-20 {
+            height: clamp(40px, calc((100vh - 300px) / 7), 80px) !important;
         }
         .sticky-top { position: sticky; top: 0; z-index: 40; background: #ffffff; }
         .sticky-left-col { position: sticky; left: 0; z-index: 45; background: #ffffff; box-shadow: 4px 0 10px rgba(0,0,0,0.05); }
@@ -208,8 +214,8 @@
                 const handleWheel = (e) => {
                     if (e.deltaY !== 0) {
                         e.preventDefault();
-                        // 감도를 -2.2로 조정하여 부드러우면서도 빠르게, 그리고 딱 멈추고 싶은 지점에 멈추도록 개선
-                        const scrollAmount = e.deltaY * -2.2; 
+                        // [개선] 방향 반전: 위로 굴리면 과거(이전 날짜), 아래로 굴리면 미래(먼 날짜)로 이동
+                        const scrollAmount = e.deltaY * 2.2; 
                         container.scrollLeft += scrollAmount;
                     }
                 };
@@ -651,7 +657,7 @@
                         <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                             <div className="max-w-full mx-auto space-y-6">
                                 <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">시간표 위에서 휠을 돌리면 가로로 이동합니다. (위: 미래 / 아래: 과거)</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
+                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">시간표 위에서 휠을 돌리면 가로로 이동합니다. (위: 과거 / 아래: 미래)</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
                                     
                                     <div ref={scrollContainerRef} className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
                                         <div className="flex min-w-max">

@@ -146,12 +146,28 @@
             const parts = dateStr.split('-');
             return parts.length === 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : dateStr;
         };
+        // [개선] 시험 등 일정의 "대상 학년"을 괄호 표기에서 안전하게 추출.
+        //  - 괄호 안에 '학년'이 있으면, 그 앞의 숫자(1~3)만 학년으로 인식한다.
+        //  - 쉼표/마침표/가운뎃점/공백/물결 등 어떤 구분자나 오타가 섞여도 정확히 인식.
+        //    예) (2,3학년) (2,.3학년) (2.3학년) (2·3학년) (2 3학년) → 모두 [2,3]
+        //  - 범위 표기 (1~3학년)/(1-3학년) → [1,2,3], '전학년' → [1,2,3]
+        //  - 괄호 학년 표기가 없으면(휴일·행사 등) 전 학년 대상으로 간주.
         const parseTargetGrades = (title) => {
-            if (!title) return [1,2,3];
-            const match = title.match(/\((\d+(?:,\s*\d+)*)학년\)/);
-            if (match) return match[1].split(',').map(s => parseInt(s.trim()));
-            const globalKeywords = ["휴일", "방학", "기념일", "대체공휴일", "신정", "추석", "설날", "재량휴업"];
-            if (globalKeywords.some(k => title.includes(k))) return [1, 2, 3];
+            if (!title) return [1, 2, 3];
+            const m = title.match(/\(([^)]*?)\s*학년/);
+            if (m) {
+                const inner = m[1];
+                const range = inner.match(/([1-3])\s*[-~∼–—]\s*([1-3])/);
+                if (range) {
+                    const lo = Math.min(+range[1], +range[2]);
+                    const hi = Math.max(+range[1], +range[2]);
+                    const arr = []; for (let g = lo; g <= hi; g++) arr.push(g);
+                    return arr;
+                }
+                const grades = [...new Set((inner.match(/[1-3]/g) || []).map(Number))].sort();
+                if (grades.length > 0) return grades;
+                return [1, 2, 3]; // '전학년' 등 숫자 미표기 → 전 학년 대상
+            }
             return [1, 2, 3];
         };
 

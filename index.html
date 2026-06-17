@@ -10,7 +10,11 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <!-- Babel for JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- [수정] 버전을 7.29.7로 고정 (정적 제공이 확실한 jsDelivr 사용).
+         예전엔 @latest라서 Babel 8.0.0이 자동 배포되며 JSX 기본 컴파일이
+         automatic runtime(react/jsx-runtime import)으로 바뀌어 화면이 통째로 안 뜨는 문제가 발생함.
+         7.x 계열은 기본이 classic runtime(React.createElement, 전역 React 사용)이라 추가 설정 없이 안전함. -->
+    <script src="https://cdn.jsdelivr.net/npm/@babel/[email protected]/babel.min.js"></script>
     <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
     <!-- Lucide Icons -->

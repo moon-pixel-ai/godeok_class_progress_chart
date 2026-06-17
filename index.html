@@ -9,11 +9,11 @@
     <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel for JSX -->
-    <!-- [수정] 버전을 7.29.7로 고정. (예전엔 @latest라 Babel 8.0.0이 자동 배포되며 JSX가
-         automatic runtime(react/jsx-runtime import)으로 컴파일되어 화면이 통째로 안 뜨던 문제 발생.
-         7.x는 기본이 classic runtime(React.createElement, 전역 React 사용)이라 추가 설정 없이 안전함.) -->
-    <script src="https://unpkg.com/@babel/[email protected]/babel.min.js"></script>
+    <!-- [수정] Babel 제거됨.
+         예전에는 브라우저가 JSX(인라인 변환)를 실시간 처리하느라 외부 babel CDN이 필요했는데,
+         그 CDN URL이 GitHub Pages 이메일 보호 기능에 깨지거나 네트워크에서 차단되어 화면이 안 뜨는 문제가 반복됨.
+         → JSX를 빌드 시점에 순수 자바스크립트(React.createElement)로 미리 변환해 넣었으므로
+            이제 babel CDN이 전혀 필요 없음. 아래 앱 스크립트는 모듈(type=module)로 브라우저가 바로 실행함. -->
     <!-- SheetJS (XLSX) -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
     <!-- Lucide Icons -->
@@ -65,697 +65,1341 @@
 <body class="bg-slate-50/50">
     <div id="root"></div>
 
-    <script type="text/babel" data-type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, initializeFirestore, persistentLocalCache, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    <script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, initializeFirestore, persistentLocalCache, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback
+} = React;
+const firebaseConfig = {
+  apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
+  authDomain: "moon-pixel.firebaseapp.com",
+  projectId: "moon-pixel",
+  storageBucket: "moon-pixel.firebasestorage.app",
+  messagingSenderId: "690517363714",
+  appId: "1:690517363714:web:a5204517fcc83982942b1b",
+  measurementId: "G-V5C04W4EG3"
+};
+const appId = 'godeok-ms-final-v3';
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache()
+});
+const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
+const PERIODS = Array.from({
+  length: 7
+}, (_, i) => `${i + 1}교시`);
+const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
+const EMPTY_SLOT = "__EMPTY__";
+const Icon = ({
+  name,
+  size = 20,
+  className = ""
+}) => /*#__PURE__*/React.createElement("i", {
+  "data-lucide": name,
+  style: {
+    width: size,
+    height: size
+  },
+  className: className
+});
+const Card = ({
+  children,
+  className = ""
+}) => /*#__PURE__*/React.createElement("div", {
+  className: `bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`
+}, children);
+const Button = ({
+  children,
+  onClick,
+  variant = "primary",
+  size = "md",
+  className = "",
+  disabled = false
+}) => {
+  const base = "inline-flex items-center justify-center font-semibold transition-all active:scale-95 disabled:opacity-50";
+  const variants = {
+    primary: "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-md hover:shadow-lg",
+    outline: "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+    ghost: "text-slate-500 hover:bg-slate-100",
+    fuchsia: "bg-gradient-to-r from-fuchsia-500 to-sky-500 text-white shadow-md hover:shadow-lg",
+    google: "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm",
+    rose: "bg-rose-500 text-white shadow-md hover:bg-rose-600",
+    amber: "bg-amber-500 text-white shadow-md hover:bg-amber-600"
+  };
+  const sizes = {
+    md: "px-4 py-2.5 rounded-2xl text-sm",
+    sm: "px-3 py-1.5 rounded-xl text-xs",
+    icon: "p-2 rounded-xl"
+  };
+  return /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onClick,
+    disabled: disabled,
+    className: `${base} ${variants[variant]} ${sizes[size]} ${className}`
+  }, children);
+};
+const MessageBox = ({
+  message,
+  onClose
+}) => /*#__PURE__*/React.createElement("div", {
+  className: "fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center focus:outline-none",
+  onKeyDown: e => {
+    if (e.key === 'Enter') onClose();
+  },
+  tabIndex: "0"
+}, /*#__PURE__*/React.createElement(Card, {
+  className: "max-w-md w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl"
+}, /*#__PURE__*/React.createElement("div", {
+  className: "mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 mb-4"
+}, /*#__PURE__*/React.createElement(Icon, {
+  name: "info",
+  className: "text-sky-500"
+})), /*#__PURE__*/React.createElement("p", {
+  className: "text-slate-600 font-bold mb-6 whitespace-pre-wrap text-sm leading-relaxed"
+}, message), /*#__PURE__*/React.createElement(Button, {
+  onClick: onClose,
+  className: "w-full"
+}, "확인")));
+const ConfirmModal = ({
+  title,
+  message,
+  onConfirm,
+  onCancel
+}) => /*#__PURE__*/React.createElement("div", {
+  className: "fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center focus:outline-none",
+  onKeyDown: e => {
+    if (e.key === 'Enter') onConfirm();else if (e.key === 'Escape') onCancel();
+  },
+  tabIndex: "0"
+}, /*#__PURE__*/React.createElement(Card, {
+  className: "max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl border-rose-100"
+}, /*#__PURE__*/React.createElement("div", {
+  className: "mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 mb-4"
+}, /*#__PURE__*/React.createElement(Icon, {
+  name: "alert-triangle",
+  className: "text-rose-500"
+})), /*#__PURE__*/React.createElement("h3", {
+  className: "text-lg font-black text-slate-800 mb-2"
+}, title), /*#__PURE__*/React.createElement("p", {
+  className: "text-slate-500 font-bold mb-6 text-xs leading-relaxed whitespace-pre-wrap"
+}, message), /*#__PURE__*/React.createElement("div", {
+  className: "flex gap-2"
+}, /*#__PURE__*/React.createElement(Button, {
+  onClick: onCancel,
+  variant: "outline",
+  className: "flex-1 text-xs"
+}, "취소"), /*#__PURE__*/React.createElement(Button, {
+  onClick: onConfirm,
+  variant: "rose",
+  className: "flex-1 text-xs"
+}, "진행하기"))));
+const makeId = p => `${p}-${Math.random().toString(36).slice(2, 8)}`;
+const shortClass = s => s && s !== EMPTY_SLOT ? s.replace(/학년\s+/g, '-').replace(/반/g, '') : "-";
+const getGrade = name => {
+  const match = name?.match(/(\d)/);
+  return match ? parseInt(match[1]) : 0;
+};
+const getSafeDate = dateStr => new Date(dateStr + "T00:00:00");
+const getLocalIsoString = d => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+const toKoreanDate = dateStr => {
+  if (!dateStr) return "";
+  const parts = dateStr.split('-');
+  return parts.length === 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : dateStr;
+};
+// [개선] 시험 등 일정의 "대상 학년"을 괄호 표기에서 안전하게 추출.
+//  - 괄호 안에 '학년'이 있으면, 그 앞의 숫자(1~3)만 학년으로 인식한다.
+//  - 쉼표/마침표/가운뎃점/공백/물결 등 어떤 구분자나 오타가 섞여도 정확히 인식.
+//    예) (2,3학년) (2,.3학년) (2.3학년) (2·3학년) (2 3학년) → 모두 [2,3]
+//  - 범위 표기 (1~3학년)/(1-3학년) → [1,2,3], '전학년' → [1,2,3]
+//  - 괄호 학년 표기가 없으면(휴일·행사 등) 전 학년 대상으로 간주.
+const parseTargetGrades = title => {
+  if (!title) return [1, 2, 3];
+  const m = title.match(/\(([^)]*?)\s*학년/);
+  if (m) {
+    const inner = m[1];
+    const range = inner.match(/([1-3])\s*[-~∼–—]\s*([1-3])/);
+    if (range) {
+      const lo = Math.min(+range[1], +range[2]);
+      const hi = Math.max(+range[1], +range[2]);
+      const arr = [];
+      for (let g = lo; g <= hi; g++) arr.push(g);
+      return arr;
+    }
+    const grades = [...new Set((inner.match(/[1-3]/g) || []).map(Number))].sort();
+    if (grades.length > 0) return grades;
+    return [1, 2, 3]; // '전학년' 등 숫자 미표기 → 전 학년 대상
+  }
+  return [1, 2, 3];
+};
+const getColorForText = text => {
+  if (!text || text === "미설정" || text.trim() === "") return "bg-white border-slate-100 text-slate-700";
+  const bgPalettes = ["bg-blue-100 border-blue-300 text-blue-900", "bg-amber-100 border-amber-400 text-amber-900", "bg-emerald-100 border-emerald-400 text-emerald-900", "bg-rose-100 border-rose-300 text-rose-900", "bg-violet-100 border-violet-300 text-violet-900", "bg-cyan-100 border-cyan-400 text-cyan-900", "bg-orange-100 border-orange-400 text-orange-900", "bg-lime-100 border-lime-400 text-lime-900", "bg-fuchsia-100 border-fuchsia-400 text-fuchsia-900", "bg-teal-100 border-teal-400 text-teal-900", "bg-sky-100 border-sky-300 text-sky-900", "bg-pink-100 border-pink-300 text-pink-900", "bg-indigo-200 border-indigo-400 text-indigo-950", "bg-yellow-200 border-yellow-500 text-yellow-950", "bg-green-200 border-green-500 text-green-950", "bg-red-200 border-red-400 text-red-950", "bg-stone-200 border-stone-400 text-stone-900", "bg-zinc-200 border-zinc-400 text-zinc-900"];
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = (hash << 5) + hash + text.charCodeAt(i);
+  const index = Math.abs(hash) % bgPalettes.length;
+  return bgPalettes[index] + " shadow-sm";
+};
+function App() {
+  const [user, setUser] = useState(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [classes, setClasses] = useState([]);
+  const [weekly, setWeekly] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [overrides, setOverrides] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [selectedClassId, setSelectedClassId] = useState(null);
+  const [weekBaseDate, setWeekBaseDate] = useState(new Date());
+  const [selectedCells, setSelectedCells] = useState([]);
+  const [editingCell, setEditingCell] = useState(null);
+  const [cellDraftClass, setCellDraftClass] = useState("");
+  const [cellDraftLabel, setCellDraftLabel] = useState("");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [modalMsg, setModalMsg] = useState("");
+  const [dragSource, setDragSource] = useState(null);
+  const [dragOverCell, setDragOverCell] = useState(null);
+  const [manualDate, setManualDate] = useState(getLocalIsoString(new Date()));
+  const [manualType, setManualType] = useState("휴업");
+  const [manualPeriods, setManualPeriods] = useState(["전교시"]);
+  const [manualTitle, setManualTitle] = useState("");
+  const [confirmModal, setConfirmModal] = useState(null);
+  const scheduleFileRef = useRef(null);
+  const eventFileRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+  const academicYearDays = useMemo(() => {
+    const days = [];
+    let current = new Date("2026-03-02");
+    const end = new Date("2027-02-28");
+    while (current <= end) {
+      const day = current.getDay();
+      if (day !== 0 && day !== 6) {
+        days.push(new Date(current));
+      }
+      current.setDate(current.getDate() + 1);
+    }
+    return days;
+  }, []);
 
-        const { useState, useEffect, useMemo, useRef, useCallback } = React;
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyC74vmNOFabZ0qd2iPjDL7pWFg3W13h6rE",
-            authDomain: "moon-pixel.firebaseapp.com",
-            projectId: "moon-pixel",
-            storageBucket: "moon-pixel.firebasestorage.app",
-            messagingSenderId: "690517363714",
-            appId: "1:690517363714:web:a5204517fcc83982942b1b",
-            measurementId: "G-V5C04W4EG3"
-        };
-        const appId = 'godeok-ms-final-v3';
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = initializeFirestore(app, { localCache: persistentLocalCache() });
-
-        const WEEKDAYS_MAP = ["월", "화", "수", "목", "금"];
-        const PERIODS = Array.from({ length: 7 }, (_, i) => `${i + 1}교시`);
-        const WEEKDAY_BY_DAY = ["일", "월", "화", "수", "목", "금", "토"];
-        const EMPTY_SLOT = "__EMPTY__";
-
-        const Icon = ({ name, size = 20, className = "" }) => <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
-        const Card = ({ children, className = "" }) => <div className={`bg-white rounded-[30px] shadow-sm border border-slate-100 ${className}`}>{children}</div>;
-
-        const Button = ({ children, onClick, variant = "primary", size = "md", className = "", disabled = false }) => {
-            const base = "inline-flex items-center justify-center font-semibold transition-all active:scale-95 disabled:opacity-50";
-            const variants = {
-                primary: "bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-md hover:shadow-lg",
-                outline: "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
-                ghost: "text-slate-500 hover:bg-slate-100",
-                fuchsia: "bg-gradient-to-r from-fuchsia-500 to-sky-500 text-white shadow-md hover:shadow-lg",
-                google: "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm",
-                rose: "bg-rose-500 text-white shadow-md hover:bg-rose-600",
-                amber: "bg-amber-500 text-white shadow-md hover:bg-amber-600"
-            };
-            const sizes = { md: "px-4 py-2.5 rounded-2xl text-sm", sm: "px-3 py-1.5 rounded-xl text-xs", icon: "p-2 rounded-xl" };
-            return <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}>{children}</button>;
-        };
-
-        const MessageBox = ({ message, onClose }) => (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/20 backdrop-blur-sm p-4 text-center focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') onClose(); }} tabIndex="0">
-                <Card className="max-w-md w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-sky-50 mb-4"><Icon name="info" className="text-sky-500" /></div>
-                    <p className="text-slate-600 font-bold mb-6 whitespace-pre-wrap text-sm leading-relaxed">{message}</p>
-                    <Button onClick={onClose} className="w-full">확인</Button>
-                </Card>
-            </div>
-        );
-
-        const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
-            <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 text-center focus:outline-none" onKeyDown={(e) => { if (e.key === 'Enter') onConfirm(); else if (e.key === 'Escape') onCancel(); }} tabIndex="0">
-                <Card className="max-w-sm w-full p-6 animate-in zoom-in-95 duration-200 shadow-2xl border-rose-100">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-50 mb-4"><Icon name="alert-triangle" className="text-rose-500" /></div>
-                    <h3 className="text-lg font-black text-slate-800 mb-2">{title}</h3>
-                    <p className="text-slate-500 font-bold mb-6 text-xs leading-relaxed whitespace-pre-wrap">{message}</p>
-                    <div className="flex gap-2">
-                        <Button onClick={onCancel} variant="outline" className="flex-1 text-xs">취소</Button>
-                        <Button onClick={onConfirm} variant="rose" className="flex-1 text-xs">진행하기</Button>
-                    </div>
-                </Card>
-            </div>
-        );
-
-        const makeId = (p) => `${p}-${Math.random().toString(36).slice(2, 8)}`;
-        const shortClass = (s) => (s && s !== EMPTY_SLOT) ? s.replace(/학년\s+/g, '-').replace(/반/g, '') : "-";
-        const getGrade = (name) => { const match = name?.match(/(\d)/); return match ? parseInt(match[1]) : 0; };
-        const getSafeDate = (dateStr) => new Date(dateStr + "T00:00:00");
-        const getLocalIsoString = (d) => {
-            const year = d.getFullYear();
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        };
-        const toKoreanDate = (dateStr) => {
-            if (!dateStr) return "";
-            const parts = dateStr.split('-');
-            return parts.length === 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : dateStr;
-        };
-        // [개선] 시험 등 일정의 "대상 학년"을 괄호 표기에서 안전하게 추출.
-        //  - 괄호 안에 '학년'이 있으면, 그 앞의 숫자(1~3)만 학년으로 인식한다.
-        //  - 쉼표/마침표/가운뎃점/공백/물결 등 어떤 구분자나 오타가 섞여도 정확히 인식.
-        //    예) (2,3학년) (2,.3학년) (2.3학년) (2·3학년) (2 3학년) → 모두 [2,3]
-        //  - 범위 표기 (1~3학년)/(1-3학년) → [1,2,3], '전학년' → [1,2,3]
-        //  - 괄호 학년 표기가 없으면(휴일·행사 등) 전 학년 대상으로 간주.
-        const parseTargetGrades = (title) => {
-            if (!title) return [1, 2, 3];
-            const m = title.match(/\(([^)]*?)\s*학년/);
-            if (m) {
-                const inner = m[1];
-                const range = inner.match(/([1-3])\s*[-~∼–—]\s*([1-3])/);
-                if (range) {
-                    const lo = Math.min(+range[1], +range[2]);
-                    const hi = Math.max(+range[1], +range[2]);
-                    const arr = []; for (let g = lo; g <= hi; g++) arr.push(g);
-                    return arr;
-                }
-                const grades = [...new Set((inner.match(/[1-3]/g) || []).map(Number))].sort();
-                if (grades.length > 0) return grades;
-                return [1, 2, 3]; // '전학년' 등 숫자 미표기 → 전 학년 대상
-            }
-            return [1, 2, 3];
-        };
-
-        const getColorForText = (text) => {
-            if (!text || text === "미설정" || text.trim() === "") return "bg-white border-slate-100 text-slate-700";
-            const bgPalettes = [ "bg-blue-100 border-blue-300 text-blue-900", "bg-amber-100 border-amber-400 text-amber-900", "bg-emerald-100 border-emerald-400 text-emerald-900", "bg-rose-100 border-rose-300 text-rose-900", "bg-violet-100 border-violet-300 text-violet-900", "bg-cyan-100 border-cyan-400 text-cyan-900", "bg-orange-100 border-orange-400 text-orange-900", "bg-lime-100 border-lime-400 text-lime-900", "bg-fuchsia-100 border-fuchsia-400 text-fuchsia-900", "bg-teal-100 border-teal-400 text-teal-900", "bg-sky-100 border-sky-300 text-sky-900", "bg-pink-100 border-pink-300 text-pink-900", "bg-indigo-200 border-indigo-400 text-indigo-950", "bg-yellow-200 border-yellow-500 text-yellow-950", "bg-green-200 border-green-500 text-green-950", "bg-red-200 border-red-400 text-red-950", "bg-stone-200 border-stone-400 text-stone-900", "bg-zinc-200 border-zinc-400 text-zinc-900" ];
-            let hash = 5381; for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) + text.charCodeAt(i);
-            const index = Math.abs(hash) % bgPalettes.length; return bgPalettes[index] + " shadow-sm";
-        };
-
-        function App() {
-            const [user, setUser] = useState(null);
-            const [isInitialLoading, setIsInitialLoading] = useState(true);
-            const [isAuthChecking, setIsAuthChecking] = useState(true);
-            
-            const [classes, setClasses] = useState([]);
-            const [weekly, setWeekly] = useState([]);
-            const [events, setEvents] = useState([]);
-            const [overrides, setOverrides] = useState([]);
-            const [history, setHistory] = useState([]); 
-            
-            const [selectedClassId, setSelectedClassId] = useState(null);
-            const [weekBaseDate, setWeekBaseDate] = useState(new Date());
-            const [selectedCells, setSelectedCells] = useState([]); 
-            const [editingCell, setEditingCell] = useState(null); 
-            const [cellDraftClass, setCellDraftClass] = useState("");
-            const [cellDraftLabel, setCellDraftLabel] = useState("");
-            const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-            const [modalMsg, setModalMsg] = useState("");
-            const [dragSource, setDragSource] = useState(null);
-            const [dragOverCell, setDragOverCell] = useState(null); 
-            
-            const [manualDate, setManualDate] = useState(getLocalIsoString(new Date()));
-            const [manualType, setManualType] = useState("휴업");
-            const [manualPeriods, setManualPeriods] = useState(["전교시"]);
-            const [manualTitle, setManualTitle] = useState("");
-            const [confirmModal, setConfirmModal] = useState(null);
-
-            const scheduleFileRef = useRef(null);
-            const eventFileRef = useRef(null);
-            const scrollContainerRef = useRef(null);
-
-            const academicYearDays = useMemo(() => {
-                const days = [];
-                let current = new Date("2026-03-02"); 
-                const end = new Date("2027-02-28");   
-                while (current <= end) {
-                    const day = current.getDay();
-                    if (day !== 0 && day !== 6) { days.push(new Date(current)); }
-                    current.setDate(current.getDate() + 1);
-                }
-                return days;
-            }, []);
-
-            // [개선: 스마트 휠 스크롤 감도 최적화]
-            useEffect(() => {
-                const container = scrollContainerRef.current;
-                if (!container) return;
-
-                const handleWheel = (e) => {
-                    if (e.deltaY !== 0) {
-                        e.preventDefault();
-                        // [개선] 방향 반전: 위로 굴리면 과거(이전 날짜), 아래로 굴리면 미래(먼 날짜)로 이동
-                        const scrollAmount = e.deltaY * 2.2; 
-                        container.scrollLeft += scrollAmount;
-                    }
-                };
-
-                container.addEventListener('wheel', handleWheel, { passive: false });
-                return () => container.removeEventListener('wheel', handleWheel);
-            }, [isInitialLoading]);
-
-            useEffect(() => {
-                if (!isInitialLoading && scrollContainerRef.current) {
-                    const todayStr = getLocalIsoString(new Date());
-                    setTimeout(() => {
-                        const todayElement = document.getElementById(`col-${todayStr}`);
-                        if (todayElement && scrollContainerRef.current) {
-                            const container = scrollContainerRef.current;
-                            const leftPos = todayElement.offsetLeft - (container.clientWidth / 2) + (todayElement.clientWidth / 2);
-                            container.scrollTo({ left: leftPos, behavior: 'auto' });
-                        }
-                    }, 500);
-                }
-            }, [isInitialLoading]);
-
-            useEffect(() => {
-                setIsAuthChecking(true);
-                let unsubscribes = [];
-                const authUnsubscribe = onAuthStateChanged(auth, (currentUser) => {
-                    setUser(currentUser);
-                    setIsAuthChecking(false);
-                    unsubscribes.forEach(un => un());
-                    unsubscribes = [];
-                    if (currentUser) {
-                        setIsInitialLoading(true);
-                        let loadedCount = 0;
-                        const colNames = ['classes', 'weekly', 'events', 'overrides'];
-                        colNames.forEach(name => {
-                            const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', currentUser.uid, name)),
-                            (snapshot) => {
-                                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                                if (name === 'classes') {
-                                    const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
-                                    setClasses(sorted);
-                                    setSelectedClassId(prev => (!prev || !sorted.find(c => c.id === prev)) && sorted.length ? sorted[0].id : prev);
-                                } else if (name === 'weekly') setWeekly(data);
-                                else if (name === 'events') setEvents(data);
-                                else if (name === 'overrides') setOverrides(data);
-                                loadedCount++;
-                                if (loadedCount >= colNames.length) setIsInitialLoading(false);
-                            },
-                            (err) => {
-                                console.error(`데이터 에러 (${name}):`, err);
-                                loadedCount++;
-                                if (loadedCount >= colNames.length) setIsInitialLoading(false);
-                            });
-                            unsubscribes.push(un);
-                        });
-                    } else {
-                        setIsInitialLoading(false);
-                    }
-                });
-                return () => {
-                    authUnsubscribe();
-                    unsubscribes.forEach(un => un());
-                };
-            }, []);
-
-            const handleGoogleLogin = async () => {
-                const provider = new GoogleAuthProvider();
-                try {
-                    const result = await signInWithPopup(auth, provider);
-                    if (result.user) setModalMsg(`${result.user.displayName} 선생님, 반갑습니다!`);
-                } catch (err) { 
-                    console.error("Login error:", err); 
-                    setModalMsg(`로그인 중 오류가 발생했습니다: ${err.message}`); 
-                }
-            };
-
-            const handleLogout = async () => { 
-                try { 
-                    await signOut(auth);
-                    setUser(null);
-                } catch (err) { console.error("로그아웃 에러:", err); } 
-            };
-
-            useEffect(() => { 
-                if (window.lucide) window.lucide.createIcons(); 
-            }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
-
-            const countRemaining = useCallback((targetClassName) => {
-                const today = new Date(); today.setHours(0, 0, 0, 0);
-                const myGrade = getGrade(targetClassName);
-                const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({ ...e, dateObj: getSafeDate(e.date) })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
-                const targetExam = upcomingExams[0]; if (!targetExam) return 0;
-                const end = targetExam.dateObj; let count = 0; const d = new Date(today);
-                while (d < end) {
-                    const iso = getLocalIsoString(d); const dayName = WEEKDAY_BY_DAY[d.getDay()];
-                    if (WEEKDAYS_MAP.includes(dayName)) {
-                        const dailyOverrides = overrides.filter(o => o.date === iso);
-                        const overrideMap = new Map();
-                        dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
-                        const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
-                        let dailyCount = 0;
-                        periodsForClassInBase.forEach(p => {
-                            const hasEventAtPeriod = events.some(e => e.date === iso && (e.period === p || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
-                            if (hasEventAtPeriod) return;
-                            const override = overrideMap.get(p);
-                            if (override) { if (override.newClassName === targetClassName) dailyCount++; } else { dailyCount++; }
-                        });
-                        const trulyAddedCount = Array.from(overrideMap.values()).filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod)).filter(o => {
-                             const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
-                             return !hasEventAtOverridePeriod;
-                        }).length;
-                        count += (dailyCount + trulyAddedCount);
-                    }
-                    d.setDate(d.getDate() + 1);
-                }
-                return count;
-            }, [events, overrides, weekly]);
-
-            const refreshRemaining = useCallback(async () => {
-                if (!user || !db) return;
-                const batch = writeBatch(db);
-                classes.forEach(c => { batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { remainingBeforeExam: countRemaining(c.name) }); });
-                await batch.commit(); setModalMsg("시수 동기화가 완료되었습니다.");
-            }, [user, db, classes, countRemaining]);
-
-            const handleFullReset = async () => {
-                if (!user || !db) return;
-                try {
-                    setConfirmModal(null);
-                    const batch = writeBatch(db);
-                    const targets = ['weekly', 'events', 'overrides'];
-                    for (const name of targets) {
-                        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
-                        snap.docs.forEach(d => batch.delete(d.ref));
-                    }
-                    const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
-                    classSnap.docs.forEach(d => batch.delete(d.ref));
-                    await batch.commit();
-                    setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
-                } catch (e) { console.error(e); }
-            };
-
-            const handleLessonReset = async () => {
-                if (!user || !db) return;
-                try {
-                    setConfirmModal(null);
-                    const batch = writeBatch(db);
-                    const overrideSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    overrideSnap.docs.forEach(d => batch.delete(d.ref));
-                    classes.forEach(c => {
-                        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
-                            lessonTitle: "미설정",
-                            memo: ""
-                        });
-                    });
-                    await batch.commit();
-                    setModalMsg("시간표 배치와 학급별 진도가 원본 상태로 복구되었습니다.");
-                } catch (e) { console.error(e); }
-            };
-
-            const pushHistory = useCallback(() => {
-                setHistory(prev => [...prev, { 
-                    overrides: JSON.parse(JSON.stringify(overrides)), 
-                    events: JSON.parse(JSON.stringify(events)) 
-                }].slice(-30));
-            }, [overrides, events]);
-
-            const undo = useCallback(async () => {
-                if (history.length === 0 || !user || !db) return;
-                const lastState = history[history.length - 1];
-                setHistory(prevHistory => prevHistory.slice(0, -1));
-                try {
-                    const batch = writeBatch(db);
-                    const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                    currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
-                    lastState.overrides.forEach(o => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o); });
-                    const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
-                    currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
-                    lastState.events.forEach(e => { batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e); });
-                    await batch.commit();
-                } catch (err) { console.error(err); }
-            }, [history, user, db]);
-
-            const getScheduleForDate = useCallback((date) => {
-                const iso = getLocalIsoString(date); const dayName = WEEKDAY_BY_DAY[date.getDay()];
-                if (!WEEKDAYS_MAP.includes(dayName)) return [];
-                const dayEvents = events.filter(e => e.date === iso);
-                const dailyOverrides = overrides.filter(o => o.date === iso);
-                const overrideMap = new Map();
-                dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
-                const baseWeek = weekly.filter(w => w.weekday === dayName);
-                return PERIODS.map(period => {
-                    const override = overrideMap.get(period);
-                    const base = baseWeek.find(w => w.period === period);
-                    let className = EMPTY_SLOT; let source = "none"; let customLabel = ""; let isClassChanged = false;
-                    if (override) { className = override.newClassName; customLabel = override.customLabel; source = "override"; isClassChanged = (override.newClassName !== (base?.className || EMPTY_SLOT)); }
-                    else if (base) { className = base.className; source = "base"; }
-                    const grade = getGrade(className);
-                    const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
-                    const isChangche = relevantEvent?.title?.includes("창체");
-                    const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
-                    return { period, className, source, customLabel, isClassChanged, isChangche, eventId: relevantEvent?.id, eventTitle: relevantEvent?.title, eventType: relevantEvent?.type, isEventMode: isBlocking && !isChangche, hasAnyEvent: !!relevantEvent };
-                });
-            }, [events, overrides, weekly]);
-
-            const handleDeleteSelected = useCallback(async () => {
-                if (!user || selectedCells.length === 0 || !db) return;
-                pushHistory();
-                try {
-                    const batch = writeBatch(db);
-                    selectedCells.forEach(cell => {
-                        const { date, period } = cell;
-                        const dObj = getSafeDate(date);
-                        const currentDataList = getScheduleForDate(dObj);
-                        const item = currentDataList.find(d => d.period === period);
-                        if (item?.eventId) { batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId)); }
-                        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
-                        if (existingOverrides.length > 0) { existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id))); }
-                        const id = makeId("o"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: EMPTY_SLOT, newPeriod: period, customLabel: "" });
-                    });
-                    await batch.commit(); setSelectedCells([]);
-                } catch (err) { console.error(err); }
-            }, [user, db, selectedCells, overrides, pushHistory, getScheduleForDate]);
-
-            useEffect(() => {
-                const handleGlobalKeyDown = (e) => { 
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); } 
-                    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') { e.preventDefault(); refreshRemaining(); }
-                    if (e.key === 'Delete') { handleDeleteSelected(); }
-                };
-                window.addEventListener('keydown', handleGlobalKeyDown);
-                return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-            }, [undo, refreshRemaining, handleDeleteSelected]);
-
-            const handleScheduleUpload = async (e) => {
-                if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
-                const file = e.target.files[0]; if (!file) return;
-                const reader = new FileReader();
-                reader.onload = async (evt) => {
-                    try {
-                        const workbook = XLSX.read(evt.target.result, { type: 'binary' });
-                        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-                        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                        const newWeekly = []; const foundClasses = new Set();
-                        const daysInExcel = rows[0] ? rows[0].slice(1) : []; 
-                        for (let i = 1; i < rows.length; i++) {
-                            const row = rows[i]; const periodName = String(row[0] || "").trim();
-                            if (!periodName.includes("교시")) continue;
-                            for (let j = 1; j < row.length; j++) {
-                                let className = String(row[j] || "").trim();
-                                if (!className || className === "-") continue;
-                                const dayName = daysInExcel[j - 1]; if (!WEEKDAYS_MAP.includes(dayName)) continue;
-                                if (className.includes("-") && !className.includes("학년")) { const pts = className.split("-"); className = `${pts[0]}학년 ${pts[1]}반`; }
-                                foundClasses.add(className); newWeekly.push({ className, weekday: dayName, period: periodName });
-                            }
-                        }
-                        const batch = writeBatch(db);
-                        const oldWeekly = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'weekly'));
-                        oldWeekly.docs.forEach(d => batch.delete(d.ref));
-                        const oldClasses = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
-                        oldClasses.docs.forEach(d => batch.delete(d.ref));
-                        const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
-                        oldOverrides.docs.forEach(d => batch.delete(d.ref));
-                        newWeekly.forEach(w => { const id = makeId("w"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'weekly', id), w); });
-                        Array.from(foundClasses).sort().forEach((name, i) => {
-                            const id = `c-${i}`; batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), { name, lessonTitle: "미설정", memo: "", remainingBeforeExam: 0, orderIndex: i });
-                        });
-                        await batch.commit(); setModalMsg("시간표 업로드 완료!");
-                    } catch (err) { setModalMsg("파일 형식이 맞지 않습니다."); }
-                };
-                reader.readAsBinaryString(file); e.target.value = "";
-            };
-
-            const handleEventUpload = async (e) => {
-                if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
-                const file = e.target.files[0]; if (!file) return;
-                const reader = new FileReader();
-                reader.onload = async (evt) => {
-                    try {
-                        const workbook = XLSX.read(evt.target.result, { type: 'binary' });
-                        const newEvents = [];
-                        workbook.SheetNames.forEach(sheetName => {
-                            const sheet = workbook.Sheets[sheetName];
-                            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                            let year = 2026, month = 1, found = false;
-                            for (let i = 0; i < Math.min(15, rows.length); i++) {
-                                for (let j = 0; j < (rows[i]?.length || 0); j++) {
-                                    const cellStr = String(rows[i][j] || "").trim();
-                                    const match = cellStr.match(/(\d+)월\s+(\d{4})/) || cellStr.match(/(\d{4})\s+(\d+)월/);
-                                    if (match) { year = match[1].length === 4 ? parseInt(match[1]) : parseInt(match[2]); month = match[1].length === 4 ? parseInt(match[2]) : parseInt(match[1]); found = true; break; }
-                                }
-                                if (found) break;
-                            }
-                            if (!found) return;
-                            for (let r = 0; r < rows.length; r++) {
-                                const row = rows[r]; for (let c = 0; c < row.length; c++) {
-                                    const val = row[c];
-                                    if (val && !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 31) {
-                                        const day = parseInt(val); let content = String(rows[r + 1]?.[c] || "").trim();
-                                        if (!content || !isNaN(content)) continue;
-                                        const dateStr = getLocalIsoString(getSafeDate(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`));
-                                        let type = "행사";
-                                        if (content.includes("고사") || content.includes("시험")) type = "시험";
-                                        else if (content.includes("휴일") || content.includes("방학") || content.includes("휴업")) type = "휴업";
-                                        newEvents.push({ date: dateStr, type, title: content });
-                                    }
-                                }
-                            }
-                        });
-                        const batch = writeBatch(db);
-                        const oldEvents = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
-                        oldEvents.docs.forEach(d => batch.delete(d.ref));
-                        newEvents.forEach(e => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), e); });
-                        await batch.commit(); setModalMsg("학사일정 동기화 완료!");
-                    } catch (err) { setModalMsg("파일 읽기 오류!"); }
-                };
-                reader.readAsBinaryString(file); e.target.value = "";
-            };
-
-            const handleAddManualEvent = async () => {
-                if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
-                if (!manualDate || !manualTitle.trim()) return;
-                pushHistory(); const batch = writeBatch(db);
-                manualPeriods.forEach(p => { const id = makeId("e"); batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), { date: manualDate, type: manualType, title: manualTitle.trim(), period: p }); });
-                await batch.commit(); setManualTitle("");
-            };
-
-            const handleDeleteEvent = async (id) => {
-                if (!user || !user.uid || !db || !id) return;
-                pushHistory(); try { await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id)); } catch (err) { console.error(err); }
-            };
-
-            const handleCellClick = (e, date, period, currentClass, currentLabel) => {
-                const iso = getLocalIsoString(date); const clickedCell = { date: iso, period };
-                let newSelection = [];
-                if (e.ctrlKey || e.metaKey) {
-                    const isSelected = selectedCells.some(c => c.date === iso && c.period === period);
-                    if (isSelected) { newSelection = selectedCells.filter(c => !(c.date === iso && c.period === period)); } else { newSelection = [...selectedCells, clickedCell]; }
-                } else if (e.shiftKey && selectedCells.length > 0) {
-                    const lastSelected = selectedCells[selectedCells.length - 1]; const allCells = [];
-                    academicYearDays.forEach(d => { const dIso = getLocalIsoString(d); PERIODS.forEach(p => allCells.push({ date: dIso, period: p })); });
-                    const startIdx = allCells.findIndex(c => c.date === lastSelected.date && c.period === lastSelected.period);
-                    const endIdx = allCells.findIndex(c => c.date === iso && c.period === period);
-                    if (startIdx !== -1 && endIdx !== -1) {
-                        const low = Math.min(startIdx, endIdx); const high = Math.max(startIdx, endIdx); const range = allCells.slice(low, high + 1);
-                        const selectionMap = new Map(); selectedCells.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
-                        range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c)); newSelection = Array.from(selectionMap.values());
-                    }
-                } else { newSelection = [clickedCell]; }
-                setSelectedCells(newSelection); setEditingCell(clickedCell); setCellDraftClass(currentClass || EMPTY_SLOT); setCellDraftLabel(currentLabel || "");
-            };
-
-            const saveCellEdit = async () => {
-                if (!user || !user.uid || selectedCells.length === 0 || !db) return;
-                pushHistory(); const currentSelected = [...selectedCells]; const classToSave = cellDraftClass; const labelToSave = cellDraftLabel;
-                setEditingCell(null); setSelectedCells([]);
-                try {
-                    const batch = writeBatch(db);
-                    currentSelected.forEach(cell => {
-                        const { date, period } = cell; 
-                        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
-                        existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                        const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
-                        const preservedClass = currentItem?.className || EMPTY_SLOT;
-                        const finalClass = currentSelected.length > 1 ? preservedClass : (classToSave || EMPTY_SLOT);
-                        const id = makeId("o");
-                        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), { id, date, newClassName: finalClass, newPeriod: period, customLabel: (labelToSave || "").trim() });
-                    });
-                    await batch.commit();
-                } catch (err) { console.error("저장 실패:", err); setModalMsg("데이터 저장 중 오류가 발생했습니다."); }
-            };
-
-            const handleDrop = async (e, targetDate, targetPeriod) => {
-                e.preventDefault(); setDragOverCell(null);
-                if (!user || !user.uid || !dragSource || !db) return;
-                if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
-                pushHistory(); 
-                const batch = writeBatch(db);
-                const existingTargets = overrides.filter(o => o.date === targetDate && o.newPeriod === targetPeriod);
-                existingTargets.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                const targetId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), { id: targetId, date: targetDate, newClassName: dragSource.className, newPeriod: targetPeriod, customLabel: dragSource.label });
-                const existingSources = overrides.filter(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
-                existingSources.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
-                const sourceId = makeId("o");
-                batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), { id: sourceId, date: dragSource.date, newClassName: EMPTY_SLOT, newPeriod: dragSource.period, customLabel: "" });
-                await batch.commit(); setDragSource(null);
-            };
-
-            const updateClassOnServer = async () => {
-                if (!user || !user.uid || !db || !selectedClassId) return;
-                const c = classes.find(cl => cl.id === selectedClassId); if (!c) return;
-                await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), { lessonTitle: c.lessonTitle, memo: c.memo });
-                setModalMsg("클라우드 저장 완료!");
-            };
-
-            const selectedClass = classes.find(c => c.id === selectedClassId);
-            const todayStr = getLocalIsoString(new Date());
-
-            if (isInitialLoading) { return ( <div className="flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"> <div className="loader"></div> <p className="text-sm font-bold text-slate-500 italic">보안 인증 및 정보 복구 중...</p> </div> ); }
-
-            return (
-                <div className="flex h-screen w-full overflow-hidden bg-slate-50/30">
-                    {modalMsg && <MessageBox message={modalMsg} onClose={() => setModalMsg("")} />}
-                    {confirmModal && <ConfirmModal {...confirmModal} />}
-
-                    <div className={`${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`}>
-                        <div className="p-8 flex items-center gap-4"> <div className="h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"><Icon name="graduation-cap" size={24}/></div> <div><h1 className="text-xl font-black text-slate-800 tracking-tight">개인 진도 관리</h1><p className="text-[11px] font-bold text-slate-400">Godeok MS 2026</p></div> </div>
-                        <div className="px-6 pb-6"> {user && !user.isAnonymous ? ( <div className="p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"> <div className="h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"> <img src={user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`} alt="profile" /> </div> <div className="flex-1 min-w-0"> <p className="text-xs font-black text-slate-800 truncate">{user.displayName} 선생님</p> <p className="text-[9px] font-bold text-slate-400 truncate">{user.email}</p> </div> <button onClick={handleLogout} title="로그아웃" className="p-2 text-slate-400 hover:text-rose-500 transition-colors"><Icon name="log-out" size={16}/></button> </div> ) : ( <Button variant="google" className="w-full py-3" onClick={handleGoogleLogin}> 구글 로그인 </Button> )} </div>
-                        
-                        <div className="flex-1 overflow-y-auto px-4 custom-scrollbar"> 
-                            <p className="text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest">학급 목록</p> 
-                            {classes.length > 0 ? classes.map((c) => ( 
-                                <div key={c.id} className={`group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`} >
-                                    <button onClick={() => setSelectedClassId(c.id)} className="flex-1 flex items-center justify-between text-left">
-                                        <div className="flex flex-col"><span>{shortClass(c.name)}</span><span className={`text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`}>{c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle}</span></div> 
-                                        <span className={`ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`}>{c.remainingBeforeExam}회</span>
-                                    </button>
-                                </div> 
-                            )) : ( <div className="px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"> <p className="text-[10px] font-bold text-slate-400 leading-relaxed italic text-center">로그인 후 파일을 업로드하세요.</p> </div> )} 
-                        </div>
-
-                        {user && !user.isAnonymous && ( 
-                            <div className="p-6 border-t border-slate-100 space-y-3"> 
-                                <input ref={scheduleFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleScheduleUpload} /> 
-                                <input ref={eventFileRef} type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleEventUpload} /> 
-                                <Button variant="outline" onClick={() => scheduleFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="upload" size={14} className="mr-2 text-sky-500"/>시간표 업로드</Button> 
-                                <Button variant="outline" onClick={() => eventFileRef.current.click()} className="w-full text-xs py-3 rounded-2xl border-dashed"><Icon name="calendar" size={14} className="mr-2 text-indigo-500"/>학사일정 동기화</Button> 
-                            </div> 
-                        )}
-                    </div>
-
-                    <div className="flex-1 flex flex-col overflow-hidden">
-                        <header className="h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm">
-                            <div className="flex items-center gap-4"> <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"><Icon name="menu" /></button> <div className="h-6 w-px bg-slate-100 mx-2"></div> <button onClick={undo} disabled={history.length === 0 || !user} className="p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"><Icon name="undo-2" size={14} /> 취소 (Ctrl+Z)</button> </div>
-                            <div className="flex items-center gap-3 text-xs font-bold text-slate-400"> <div className={`px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`}> <div className={`w-1.5 h-1.5 rounded-full ${user ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></div> {user ? '서버 연결됨' : '인증 대기'} </div> <Button variant="outline" size="sm" onClick={refreshRemaining} disabled={!user} className="rounded-xl ml-4"><Icon name="refresh-cw" size={14} className="mr-2 text-sky-500"/>시수 동기화 (Ctrl+X)</Button> </div>
-                        </header>
-
-                        <main className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                            <div className="max-w-full mx-auto space-y-6">
-                                <Card className="p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50">
-                                    <div className="p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"> <div><h2 className="text-xl font-black text-slate-800 tracking-tight">2026학년도 전체 진도표 (연간 스크롤)</h2><p className="text-xs font-bold text-slate-400 mt-1">시간표 위에서 휠을 돌리면 가로로 이동합니다. (위: 과거 / 아래: 미래)</p></div> <div className="flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"> <Button variant="ghost" size="sm" onClick={() => { const todayEl = document.getElementById(`col-${todayStr}`); if(todayEl && scrollContainerRef.current) { const container = scrollContainerRef.current; const leftPos = todayEl.offsetLeft - (container.clientWidth / 2) + (todayEl.clientWidth / 2); container.scrollTo({ left: leftPos, behavior: 'smooth' }); } }} className="text-[10px] font-black text-sky-600"><Icon name="navigation" size={12} className="mr-1"/> 오늘 위치로 이동</Button> </div> </div>
-                                    
-                                    <div ref={scrollContainerRef} className="timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]">
-                                        <div className="flex min-w-max">
-                                            <div className="w-14 flex-shrink-0 sticky-left-col"> <div className="h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50">교시</div> {PERIODS.map(p => (<div key={p} className="h-20 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base">{p.replace("교시", "")}</div>))} </div>
-                                            {academicYearDays.map((day, dIdx) => {
-                                                const data = getScheduleForDate(day); const dIso = getLocalIsoString(day); const isToday = dIso === todayStr;
-                                                return (<div key={day.toString()} id={`col-${dIso}`} className={`timetable-column border-r border-slate-50 ${isToday ? "today-column shadow-[inset_0_0_20px_rgba(14,165,233,0.05)]" : ""}`}><div className={`h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm ${isToday ? "today-header" : "bg-white/90 backdrop-blur-md"}`}><span className={`block text-base font-black leading-none ${isToday ? "text-white" : (day.getDay() === 1 ? "text-sky-600" : "text-slate-700")}`}>{WEEKDAY_BY_DAY[day.getDay()]}</span><span className={`text-[10px] font-bold mt-1 block ${isToday ? "text-white/80" : "text-slate-400"}`}>{day.getMonth()+1}/{day.getDate()}</span></div>{PERIODS.map(period => {
-                                                    const item = data.find(d => d.period === period); const isEditing = editingCell?.date === dIso && editingCell?.period === period; const isSelected = selectedCells.some(c => c.date === dIso && c.period === period); const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
-                                                    let colorClass = "";
-                                                    if (item?.hasAnyEvent) {
-                                                        if (item.eventType === '시험') { colorClass = "bg-indigo-100 border-indigo-400 text-indigo-900"; } 
-                                                        else if (item.eventType === '휴업') { colorClass = "bg-rose-100 border-rose-400 text-rose-900"; } 
-                                                        else { colorClass = "bg-emerald-100 border-emerald-400 text-emerald-900"; }
-                                                    } else { colorClass = getColorForText(item?.customLabel || item?.lessonTitle); }
-                                                    return (<div key={period} className={`h-20 p-1 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`} onDragOver={(e) => { e.preventDefault(); if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) { setDragOverCell({ date: dIso, period }); } }} onDragLeave={() => setDragOverCell(null)} onDrop={(e) => handleDrop(e, dIso, period)}> <div draggable={!!item && item.className !== EMPTY_SLOT && !isEditing} onDragStart={(e) => { if (!item || item.className === EMPTY_SLOT) return; setDragSource({ date: dIso, period, className: item.className, label: item.customLabel || "" }); e.dataTransfer.setData("application/json", "{}"); e.currentTarget.classList.add("dragging-cell"); }} onDragEnd={(e) => { e.currentTarget.classList.remove("dragging-cell"); setDragOverCell(null); }} onClick={(e) => handleCellClick(e, day, period, item?.className, item?.customLabel)} className={`relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`}>
-                                                        {item?.isEventMode ? ( <div className="text-center px-1 relative w-full h-full flex flex-col items-center justify-center"> <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> <div className="pointer-events-none"> <p className="text-[8px] font-black uppercase opacity-60 mb-0.5 leading-none">{item.eventType}</p> <p className="text-[9px] font-black leading-tight break-all line-clamp-2">{item.eventTitle}</p> </div> </div> ) : isEditing ? (<div className="absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}><select value={cellDraftClass} onChange={(e) => setCellDraftClass(e.target.value)} className={`w-full text-[9px] p-1 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`}>{selectedCells.length > 1 ? <option value="">학급 유지됨</option> : <option value={EMPTY_SLOT}>수업 없음</option>}{classes.map(c => <option key={c.id} value={c.name}>{shortClass(c.name)}</option>)}</select><input autoFocus value={cellDraftLabel} onChange={e => setCellDraftLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveCellEdit(); if (e.key === 'Escape') { setEditingCell(null); setSelectedCells([]); } }} className="w-full text-[9px] p-1 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner" placeholder="활동명 입력 (Enter 저장)" /><div className="mt-auto flex gap-1"><button type="button" onClick={saveCellEdit} className="flex-1 bg-sky-500 text-white rounded-lg text-[9px] font-black py-1 shadow-sm">저장</button><button type="button" onClick={() => {setEditingCell(null); setSelectedCells([]);}} className="flex-1 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-black py-1">취소</button></div></div>) : ( <div className="w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"> {item?.hasAnyEvent && ( <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleDeleteEvent(item.eventId); }} className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"><Icon name="x" size={12}/></button> )} {item?.className !== EMPTY_SLOT && ( <span className="font-black text-[13px] tracking-tighter leading-none pointer-events-none"> {shortClass(item?.className)} {item?.isClassChanged && <span className="text-[7px] text-amber-600 ml-0.5 font-bold">(수)</span>} </span> )} {item?.className === EMPTY_SLOT && item?.hasAnyEvent && ( <p className="text-[9px] font-black leading-tight break-all line-clamp-2 text-center pointer-events-none">{item.eventTitle}</p> )} {item?.className !== EMPTY_SLOT && item?.hasAnyEvent && ( <span className={`text-[8px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`}> {item.isChangche ? '창체' : (item.eventTitle.length > 4 ? item.eventTitle.slice(0,4)+'..' : item.eventTitle)} </span> )} {item?.customLabel && (<span className="text-[8px] font-bold mt-0.5 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none">{item.customLabel}</span>)} {(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && <span className="text-slate-200 pointer-events-none">-</span>} </div> )}</div></div>);
-                                                })}</div>);
-                                            })}
-                                        </div>
-                                    </div>
-                                </Card>
-
-                                {selectedClass && ( 
-                                    <Card className="p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"> 
-                                        <div className="flex items-center gap-3 mb-8"><Icon name="edit-3" className="text-sky-500" size={20}/><h2 className="text-xl font-black text-slate-800 tracking-tight">학급별 상세 진도 기록</h2></div> 
-                                        <div className="grid lg:grid-cols-2 gap-10"> 
-                                            <div className="space-y-5"> 
-                                                <div className="bg-slate-50 p-5 rounded-[24px] border border-slate-100 shadow-inner"><div className="flex items-center justify-between"><div className="flex flex-col"><p className="text-[9px] font-black text-slate-400 mb-1 uppercase">선택 학급</p><span className="text-2xl font-black text-slate-800">{shortClass(selectedClass.name)}</span></div><div className="flex flex-col items-end"><span className="text-[10px] font-bold text-slate-400 mb-1">시험까지 남은 수업</span><span className="bg-sky-500 px-3 py-1 rounded-full text-[11px] font-black text-white shadow-lg">{selectedClass.remainingBeforeExam}회</span></div></div></div> 
-                                                <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">현재 진행 단원</label><input value={selectedClass.lessonTitle || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClass.id ? {...c, lessonTitle: val} : c)); }} onKeyDown={(e) => e.key === 'Enter' && updateClassOnServer()} className="w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm" placeholder="단원명을 기록하세요" /></div> 
-                                            </div> 
-                                            <div className="space-y-2 flex flex-col"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">수업 특이사항 메모</label><textarea value={selectedClass.memo || ""} onChange={e => { const val = e.target.value; setClasses(prev => prev.map(c => c.id === selectedClass.id ? {...c, memo: val} : c)); }} className="flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner" placeholder="반별 특이사항을 기록하세요..."></textarea></div> 
-                                        </div> 
-                                        <div className="mt-8 flex justify-end"><Button variant="fuchsia" className="px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100" onClick={updateClassOnServer}><Icon name="save" size={18} className="mr-2"/>진도 저장하기</Button></div> 
-                                    </Card> 
-                                )}
-
-                                <Card className="p-8 shadow-xl shadow-slate-200/40"> 
-                                    <div className="flex items-center gap-3 mb-6"><Icon name="calendar-plus" className="text-indigo-500"/><h2 className="text-xl font-black text-slate-800 tracking-tight">개별 학사 일정 관리</h2></div> 
-                                    <div className="grid lg:grid-cols-3 gap-8">
-                                        <div className="lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner">
-                                            <div className="flex flex-col gap-6">
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
-                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">날짜 선택</label><input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
-                                                    <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 유형</label><select value={manualType} onChange={e => setManualType(e.target.value)} className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm"><option value="휴업">휴업 (수업제외)</option><option value="시험">시험 (수업제외)</option><option value="행사(수업제외)">행사 (수업제외)</option><option value="행사">행사 (수업포함)</option></select></div>
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <label className="text-[10px] font-black text-slate-400 uppercase ml-2">교시 선택 (중복 가능)</label>
-                                                    <div className="flex flex-wrap gap-2">
-                                                        {["전교시", ...PERIODS].map(p => (
-                                                            <button key={p} type="button" onClick={() => { if (p === "전교시") { setManualPeriods(["전교시"]); } else { const next = manualPeriods.includes("전교시") ? [] : [...manualPeriods]; if (next.includes(p)) { const filtered = next.filter(x => x !== p); setManualPeriods(filtered.length === 0 ? ["전교시"] : filtered); } else { setManualPeriods([...next, p]); } } }} className={`px-3 py-1.5 rounded-xl text-[10px] font-black border transition-all ${ manualPeriods.includes(p) ? "bg-sky-500 text-white border-transparent shadow-md" : "bg-white text-slate-500 border-slate-200" }`}> {p === "전교시" ? "하루종일" : p.replace("교시", "")} </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
-                                                <div className="space-y-2"><label className="text-[10px] font-black text-slate-400 uppercase ml-2">일정 내용</label><input value={manualTitle} onChange={e => setManualTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleAddManualEvent()} placeholder="예: 기말고사(2학년) 혹은 재량휴업" className="w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm" /></div>
-                                                <Button onClick={handleAddManualEvent} className="w-full py-4 shadow-lg text-base">일정 추가하기</Button>
-                                            </div>
-                                        </div>
-                                        <div className="lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden">
-                                            <p className="text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"><Icon name="list" size={12}/> 전체 학사 일정 리스트</p>
-                                            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                                {events.length > 0 ? (
-                                                    events.sort((a,b) => a.date.localeCompare(b.date)).map(e => (
-                                                        <div key={e.id} className="flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50">
-                                                            <div className="flex flex-col gap-1"><span className="text-[10px] font-black text-slate-400">{e.date.slice(5)}</span><span className="text-xs font-bold text-slate-700">{e.title} {e.period && e.period !== '전교시' && `(${e.period.replace('교시','')})`}</span></div>
-                                                            <button type="button" onClick={(ev) => { ev.stopPropagation(); handleDeleteEvent(e.id); }} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash-2" size={14}/></button>
-                                                        </div>
-                                                    ))
-                                                ) : ( <div className="h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic">등록된 일정이 없습니다.</div> )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </Card>
-                            </div>
-                        </main>
-                    </div>
-                </div>
-            );
+  // [개선: 스마트 휠 스크롤 감도 최적화]
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const handleWheel = e => {
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+        // [개선] 방향 반전: 위로 굴리면 과거(이전 날짜), 아래로 굴리면 미래(먼 날짜)로 이동
+        const scrollAmount = e.deltaY * 2.2;
+        container.scrollLeft += scrollAmount;
+      }
+    };
+    container.addEventListener('wheel', handleWheel, {
+      passive: false
+    });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [isInitialLoading]);
+  useEffect(() => {
+    if (!isInitialLoading && scrollContainerRef.current) {
+      const todayStr = getLocalIsoString(new Date());
+      setTimeout(() => {
+        const todayElement = document.getElementById(`col-${todayStr}`);
+        if (todayElement && scrollContainerRef.current) {
+          const container = scrollContainerRef.current;
+          const leftPos = todayElement.offsetLeft - container.clientWidth / 2 + todayElement.clientWidth / 2;
+          container.scrollTo({
+            left: leftPos,
+            behavior: 'auto'
+          });
         }
-        const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<App />);
+      }, 500);
+    }
+  }, [isInitialLoading]);
+  useEffect(() => {
+    setIsAuthChecking(true);
+    let unsubscribes = [];
+    const authUnsubscribe = onAuthStateChanged(auth, currentUser => {
+      setUser(currentUser);
+      setIsAuthChecking(false);
+      unsubscribes.forEach(un => un());
+      unsubscribes = [];
+      if (currentUser) {
+        setIsInitialLoading(true);
+        let loadedCount = 0;
+        const colNames = ['classes', 'weekly', 'events', 'overrides'];
+        colNames.forEach(name => {
+          const un = onSnapshot(query(collection(db, 'artifacts', appId, 'users', currentUser.uid, name)), snapshot => {
+            const data = snapshot.docs.map(doc => ({
+              id: doc.id,
+              ...doc.data()
+            }));
+            if (name === 'classes') {
+              const sorted = data.sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+              setClasses(sorted);
+              setSelectedClassId(prev => (!prev || !sorted.find(c => c.id === prev)) && sorted.length ? sorted[0].id : prev);
+            } else if (name === 'weekly') setWeekly(data);else if (name === 'events') setEvents(data);else if (name === 'overrides') setOverrides(data);
+            loadedCount++;
+            if (loadedCount >= colNames.length) setIsInitialLoading(false);
+          }, err => {
+            console.error(`데이터 에러 (${name}):`, err);
+            loadedCount++;
+            if (loadedCount >= colNames.length) setIsInitialLoading(false);
+          });
+          unsubscribes.push(un);
+        });
+      } else {
+        setIsInitialLoading(false);
+      }
+    });
+    return () => {
+      authUnsubscribe();
+      unsubscribes.forEach(un => un());
+    };
+  }, []);
+  const handleGoogleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      const result = await signInWithPopup(auth, provider);
+      if (result.user) setModalMsg(`${result.user.displayName} 선생님, 반갑습니다!`);
+    } catch (err) {
+      console.error("Login error:", err);
+      setModalMsg(`로그인 중 오류가 발생했습니다: ${err.message}`);
+    }
+  };
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (err) {
+      console.error("로그아웃 에러:", err);
+    }
+  };
+  useEffect(() => {
+    if (window.lucide) window.lucide.createIcons();
+  }, [isInitialLoading, isSidebarOpen, editingCell, events, weekly, classes, user, selectedCells, overrides]);
+  const countRemaining = useCallback(targetClassName => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const myGrade = getGrade(targetClassName);
+    const upcomingExams = events.filter(e => (e.type === "시험" || e.title?.includes("고사")) && parseTargetGrades(e.title).includes(myGrade)).map(e => ({
+      ...e,
+      dateObj: getSafeDate(e.date)
+    })).filter(e => e.dateObj >= today).sort((a, b) => a.dateObj - b.dateObj);
+    const targetExam = upcomingExams[0];
+    if (!targetExam) return 0;
+    const end = targetExam.dateObj;
+    let count = 0;
+    const d = new Date(today);
+    while (d < end) {
+      const iso = getLocalIsoString(d);
+      const dayName = WEEKDAY_BY_DAY[d.getDay()];
+      if (WEEKDAYS_MAP.includes(dayName)) {
+        const dailyOverrides = overrides.filter(o => o.date === iso);
+        const overrideMap = new Map();
+        dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
+        const periodsForClassInBase = weekly.filter(w => w.className === targetClassName && w.weekday === dayName).map(w => w.period);
+        let dailyCount = 0;
+        periodsForClassInBase.forEach(p => {
+          const hasEventAtPeriod = events.some(e => e.date === iso && (e.period === p || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
+          if (hasEventAtPeriod) return;
+          const override = overrideMap.get(p);
+          if (override) {
+            if (override.newClassName === targetClassName) dailyCount++;
+          } else {
+            dailyCount++;
+          }
+        });
+        const trulyAddedCount = Array.from(overrideMap.values()).filter(o => o.newClassName === targetClassName && !periodsForClassInBase.includes(o.newPeriod)).filter(o => {
+          const hasEventAtOverridePeriod = events.some(e => e.date === iso && (e.period === o.newPeriod || e.period === "전교시" || !e.period) && parseTargetGrades(e.title).includes(myGrade));
+          return !hasEventAtOverridePeriod;
+        }).length;
+        count += dailyCount + trulyAddedCount;
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    return count;
+  }, [events, overrides, weekly]);
+  const refreshRemaining = useCallback(async () => {
+    if (!user || !db) return;
+    const batch = writeBatch(db);
+    classes.forEach(c => {
+      batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
+        remainingBeforeExam: countRemaining(c.name)
+      });
+    });
+    await batch.commit();
+    setModalMsg("시수 동기화가 완료되었습니다.");
+  }, [user, db, classes, countRemaining]);
+  const handleFullReset = async () => {
+    if (!user || !db) return;
+    try {
+      setConfirmModal(null);
+      const batch = writeBatch(db);
+      const targets = ['weekly', 'events', 'overrides'];
+      for (const name of targets) {
+        const snap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, name));
+        snap.docs.forEach(d => batch.delete(d.ref));
+      }
+      const classSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+      classSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      setModalMsg("학기 데이터가 완전히 초기화되었습니다.");
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  const handleLessonReset = async () => {
+    if (!user || !db) return;
+    try {
+      setConfirmModal(null);
+      const batch = writeBatch(db);
+      const overrideSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+      overrideSnap.docs.forEach(d => batch.delete(d.ref));
+      classes.forEach(c => {
+        batch.update(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
+          lessonTitle: "미설정",
+          memo: ""
+        });
+      });
+      await batch.commit();
+      setModalMsg("시간표 배치와 학급별 진도가 원본 상태로 복구되었습니다.");
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  const pushHistory = useCallback(() => {
+    setHistory(prev => [...prev, {
+      overrides: JSON.parse(JSON.stringify(overrides)),
+      events: JSON.parse(JSON.stringify(events))
+    }].slice(-30));
+  }, [overrides, events]);
+  const undo = useCallback(async () => {
+    if (history.length === 0 || !user || !db) return;
+    const lastState = history[history.length - 1];
+    setHistory(prevHistory => prevHistory.slice(0, -1));
+    try {
+      const batch = writeBatch(db);
+      const currentOverridesSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+      currentOverridesSnap.docs.forEach(d => batch.delete(d.ref));
+      lastState.overrides.forEach(o => {
+        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id), o);
+      });
+      const currentEventsSnap = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+      currentEventsSnap.docs.forEach(d => batch.delete(d.ref));
+      lastState.events.forEach(e => {
+        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', e.id), e);
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error(err);
+    }
+  }, [history, user, db]);
+  const getScheduleForDate = useCallback(date => {
+    const iso = getLocalIsoString(date);
+    const dayName = WEEKDAY_BY_DAY[date.getDay()];
+    if (!WEEKDAYS_MAP.includes(dayName)) return [];
+    const dayEvents = events.filter(e => e.date === iso);
+    const dailyOverrides = overrides.filter(o => o.date === iso);
+    const overrideMap = new Map();
+    dailyOverrides.forEach(o => overrideMap.set(o.newPeriod, o));
+    const baseWeek = weekly.filter(w => w.weekday === dayName);
+    return PERIODS.map(period => {
+      const override = overrideMap.get(period);
+      const base = baseWeek.find(w => w.period === period);
+      let className = EMPTY_SLOT;
+      let source = "none";
+      let customLabel = "";
+      let isClassChanged = false;
+      if (override) {
+        className = override.newClassName;
+        customLabel = override.customLabel;
+        source = "override";
+        isClassChanged = override.newClassName !== (base?.className || EMPTY_SLOT);
+      } else if (base) {
+        className = base.className;
+        source = "base";
+      }
+      const grade = getGrade(className);
+      const relevantEvent = dayEvents.find(e => (e.period === "전교시" || e.period === period || !e.period) && (className === EMPTY_SLOT ? true : parseTargetGrades(e.title).includes(grade)));
+      const isChangche = relevantEvent?.title?.includes("창체");
+      const isBlocking = relevantEvent && (relevantEvent.type === '시험' || relevantEvent.type === '휴업' || relevantEvent.type === '행사(수업제외)');
+      return {
+        period,
+        className,
+        source,
+        customLabel,
+        isClassChanged,
+        isChangche,
+        eventId: relevantEvent?.id,
+        eventTitle: relevantEvent?.title,
+        eventType: relevantEvent?.type,
+        isEventMode: isBlocking && !isChangche,
+        hasAnyEvent: !!relevantEvent
+      };
+    });
+  }, [events, overrides, weekly]);
+  const handleDeleteSelected = useCallback(async () => {
+    if (!user || selectedCells.length === 0 || !db) return;
+    pushHistory();
+    try {
+      const batch = writeBatch(db);
+      selectedCells.forEach(cell => {
+        const {
+          date,
+          period
+        } = cell;
+        const dObj = getSafeDate(date);
+        const currentDataList = getScheduleForDate(dObj);
+        const item = currentDataList.find(d => d.period === period);
+        if (item?.eventId) {
+          batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'events', item.eventId));
+        }
+        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
+        if (existingOverrides.length > 0) {
+          existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+        }
+        const id = makeId("o");
+        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), {
+          id,
+          date,
+          newClassName: EMPTY_SLOT,
+          newPeriod: period,
+          customLabel: ""
+        });
+      });
+      await batch.commit();
+      setSelectedCells([]);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [user, db, selectedCells, overrides, pushHistory, getScheduleForDate]);
+  useEffect(() => {
+    const handleGlobalKeyDown = e => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
+        e.preventDefault();
+        refreshRemaining();
+      }
+      if (e.key === 'Delete') {
+        handleDeleteSelected();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [undo, refreshRemaining, handleDeleteSelected]);
+  const handleScheduleUpload = async e => {
+    if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async evt => {
+      try {
+        const workbook = XLSX.read(evt.target.result, {
+          type: 'binary'
+        });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, {
+          header: 1
+        });
+        const newWeekly = [];
+        const foundClasses = new Set();
+        const daysInExcel = rows[0] ? rows[0].slice(1) : [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          const periodName = String(row[0] || "").trim();
+          if (!periodName.includes("교시")) continue;
+          for (let j = 1; j < row.length; j++) {
+            let className = String(row[j] || "").trim();
+            if (!className || className === "-") continue;
+            const dayName = daysInExcel[j - 1];
+            if (!WEEKDAYS_MAP.includes(dayName)) continue;
+            if (className.includes("-") && !className.includes("학년")) {
+              const pts = className.split("-");
+              className = `${pts[0]}학년 ${pts[1]}반`;
+            }
+            foundClasses.add(className);
+            newWeekly.push({
+              className,
+              weekday: dayName,
+              period: periodName
+            });
+          }
+        }
+        const batch = writeBatch(db);
+        const oldWeekly = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'weekly'));
+        oldWeekly.docs.forEach(d => batch.delete(d.ref));
+        const oldClasses = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'classes'));
+        oldClasses.docs.forEach(d => batch.delete(d.ref));
+        const oldOverrides = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'overrides'));
+        oldOverrides.docs.forEach(d => batch.delete(d.ref));
+        newWeekly.forEach(w => {
+          const id = makeId("w");
+          batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'weekly', id), w);
+        });
+        Array.from(foundClasses).sort().forEach((name, i) => {
+          const id = `c-${i}`;
+          batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', id), {
+            name,
+            lessonTitle: "미설정",
+            memo: "",
+            remainingBeforeExam: 0,
+            orderIndex: i
+          });
+        });
+        await batch.commit();
+        setModalMsg("시간표 업로드 완료!");
+      } catch (err) {
+        setModalMsg("파일 형식이 맞지 않습니다.");
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = "";
+  };
+  const handleEventUpload = async e => {
+    if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async evt => {
+      try {
+        const workbook = XLSX.read(evt.target.result, {
+          type: 'binary'
+        });
+        const newEvents = [];
+        workbook.SheetNames.forEach(sheetName => {
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet, {
+            header: 1
+          });
+          let year = 2026,
+            month = 1,
+            found = false;
+          for (let i = 0; i < Math.min(15, rows.length); i++) {
+            for (let j = 0; j < (rows[i]?.length || 0); j++) {
+              const cellStr = String(rows[i][j] || "").trim();
+              const match = cellStr.match(/(\d+)월\s+(\d{4})/) || cellStr.match(/(\d{4})\s+(\d+)월/);
+              if (match) {
+                year = match[1].length === 4 ? parseInt(match[1]) : parseInt(match[2]);
+                month = match[1].length === 4 ? parseInt(match[2]) : parseInt(match[1]);
+                found = true;
+                break;
+              }
+            }
+            if (found) break;
+          }
+          if (!found) return;
+          for (let r = 0; r < rows.length; r++) {
+            const row = rows[r];
+            for (let c = 0; c < row.length; c++) {
+              const val = row[c];
+              if (val && !isNaN(val) && parseInt(val) >= 1 && parseInt(val) <= 31) {
+                const day = parseInt(val);
+                let content = String(rows[r + 1]?.[c] || "").trim();
+                if (!content || !isNaN(content)) continue;
+                const dateStr = getLocalIsoString(getSafeDate(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`));
+                let type = "행사";
+                if (content.includes("고사") || content.includes("시험")) type = "시험";else if (content.includes("휴일") || content.includes("방학") || content.includes("휴업")) type = "휴업";
+                newEvents.push({
+                  date: dateStr,
+                  type,
+                  title: content
+                });
+              }
+            }
+          }
+        });
+        const batch = writeBatch(db);
+        const oldEvents = await getDocs(collection(db, 'artifacts', appId, 'users', user.uid, 'events'));
+        oldEvents.docs.forEach(d => batch.delete(d.ref));
+        newEvents.forEach(e => {
+          const id = makeId("e");
+          batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), e);
+        });
+        await batch.commit();
+        setModalMsg("학사일정 동기화 완료!");
+      } catch (err) {
+        setModalMsg("파일 읽기 오류!");
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = "";
+  };
+  const handleAddManualEvent = async () => {
+    if (!user || !user.uid || !db) return setModalMsg("로그인이 필요합니다.");
+    if (!manualDate || !manualTitle.trim()) return;
+    pushHistory();
+    const batch = writeBatch(db);
+    manualPeriods.forEach(p => {
+      const id = makeId("e");
+      batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id), {
+        date: manualDate,
+        type: manualType,
+        title: manualTitle.trim(),
+        period: p
+      });
+    });
+    await batch.commit();
+    setManualTitle("");
+  };
+  const handleDeleteEvent = async id => {
+    if (!user || !user.uid || !db || !id) return;
+    pushHistory();
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'events', id));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  const handleCellClick = (e, date, period, currentClass, currentLabel) => {
+    const iso = getLocalIsoString(date);
+    const clickedCell = {
+      date: iso,
+      period
+    };
+    let newSelection = [];
+    if (e.ctrlKey || e.metaKey) {
+      const isSelected = selectedCells.some(c => c.date === iso && c.period === period);
+      if (isSelected) {
+        newSelection = selectedCells.filter(c => !(c.date === iso && c.period === period));
+      } else {
+        newSelection = [...selectedCells, clickedCell];
+      }
+    } else if (e.shiftKey && selectedCells.length > 0) {
+      const lastSelected = selectedCells[selectedCells.length - 1];
+      const allCells = [];
+      academicYearDays.forEach(d => {
+        const dIso = getLocalIsoString(d);
+        PERIODS.forEach(p => allCells.push({
+          date: dIso,
+          period: p
+        }));
+      });
+      const startIdx = allCells.findIndex(c => c.date === lastSelected.date && c.period === lastSelected.period);
+      const endIdx = allCells.findIndex(c => c.date === iso && c.period === period);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const low = Math.min(startIdx, endIdx);
+        const high = Math.max(startIdx, endIdx);
+        const range = allCells.slice(low, high + 1);
+        const selectionMap = new Map();
+        selectedCells.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
+        range.forEach(c => selectionMap.set(`${c.date}-${c.period}`, c));
+        newSelection = Array.from(selectionMap.values());
+      }
+    } else {
+      newSelection = [clickedCell];
+    }
+    setSelectedCells(newSelection);
+    setEditingCell(clickedCell);
+    setCellDraftClass(currentClass || EMPTY_SLOT);
+    setCellDraftLabel(currentLabel || "");
+  };
+  const saveCellEdit = async () => {
+    if (!user || !user.uid || selectedCells.length === 0 || !db) return;
+    pushHistory();
+    const currentSelected = [...selectedCells];
+    const classToSave = cellDraftClass;
+    const labelToSave = cellDraftLabel;
+    setEditingCell(null);
+    setSelectedCells([]);
+    try {
+      const batch = writeBatch(db);
+      currentSelected.forEach(cell => {
+        const {
+          date,
+          period
+        } = cell;
+        const existingOverrides = overrides.filter(o => o.date === date && o.newPeriod === period);
+        existingOverrides.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+        const currentItem = getScheduleForDate(getSafeDate(date)).find(d => d.period === period);
+        const preservedClass = currentItem?.className || EMPTY_SLOT;
+        const finalClass = currentSelected.length > 1 ? preservedClass : classToSave || EMPTY_SLOT;
+        const id = makeId("o");
+        batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', id), {
+          id,
+          date,
+          newClassName: finalClass,
+          newPeriod: period,
+          customLabel: (labelToSave || "").trim()
+        });
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error("저장 실패:", err);
+      setModalMsg("데이터 저장 중 오류가 발생했습니다.");
+    }
+  };
+  const handleDrop = async (e, targetDate, targetPeriod) => {
+    e.preventDefault();
+    setDragOverCell(null);
+    if (!user || !user.uid || !dragSource || !db) return;
+    if (dragSource.date === targetDate && dragSource.period === targetPeriod) return;
+    pushHistory();
+    const batch = writeBatch(db);
+    const existingTargets = overrides.filter(o => o.date === targetDate && o.newPeriod === targetPeriod);
+    existingTargets.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+    const targetId = makeId("o");
+    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', targetId), {
+      id: targetId,
+      date: targetDate,
+      newClassName: dragSource.className,
+      newPeriod: targetPeriod,
+      customLabel: dragSource.label
+    });
+    const existingSources = overrides.filter(o => o.date === dragSource.date && o.newPeriod === dragSource.period);
+    existingSources.forEach(o => batch.delete(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', o.id)));
+    const sourceId = makeId("o");
+    batch.set(doc(db, 'artifacts', appId, 'users', user.uid, 'overrides', sourceId), {
+      id: sourceId,
+      date: dragSource.date,
+      newClassName: EMPTY_SLOT,
+      newPeriod: dragSource.period,
+      customLabel: ""
+    });
+    await batch.commit();
+    setDragSource(null);
+  };
+  const updateClassOnServer = async () => {
+    if (!user || !user.uid || !db || !selectedClassId) return;
+    const c = classes.find(cl => cl.id === selectedClassId);
+    if (!c) return;
+    await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'classes', c.id), {
+      lessonTitle: c.lessonTitle,
+      memo: c.memo
+    });
+    setModalMsg("클라우드 저장 완료!");
+  };
+  const selectedClass = classes.find(c => c.id === selectedClassId);
+  const todayStr = getLocalIsoString(new Date());
+  if (isInitialLoading) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "flex h-screen flex-col items-center justify-center bg-slate-50 gap-4"
+    }, " ", /*#__PURE__*/React.createElement("div", {
+      className: "loader"
+    }), " ", /*#__PURE__*/React.createElement("p", {
+      className: "text-sm font-bold text-slate-500 italic"
+    }, "보안 인증 및 정보 복구 중..."), " ");
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex h-screen w-full overflow-hidden bg-slate-50/30"
+  }, modalMsg && /*#__PURE__*/React.createElement(MessageBox, {
+    message: modalMsg,
+    onClose: () => setModalMsg("")
+  }), confirmModal && /*#__PURE__*/React.createElement(ConfirmModal, confirmModal), /*#__PURE__*/React.createElement("div", {
+    className: `${isSidebarOpen ? "w-80" : "w-0"} flex h-full flex-col border-r border-slate-200 bg-white transition-all duration-300 overflow-hidden shadow-sm z-20`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-8 flex items-center gap-4"
+  }, " ", /*#__PURE__*/React.createElement("div", {
+    className: "h-12 w-12 flex items-center justify-center rounded-[18px] bg-sky-500 text-white shadow-lg"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "graduation-cap",
+    size: 24
+  })), " ", /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    className: "text-xl font-black text-slate-800 tracking-tight"
+  }, "개인 진도 관리"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[11px] font-bold text-slate-400"
+  }, "Godeok MS 2026")), " "), /*#__PURE__*/React.createElement("div", {
+    className: "px-6 pb-6"
+  }, " ", user && !user.isAnonymous ? /*#__PURE__*/React.createElement("div", {
+    className: "p-4 bg-sky-50 rounded-2xl flex items-center gap-3 border border-sky-100 shadow-sm"
+  }, " ", /*#__PURE__*/React.createElement("div", {
+    className: "h-10 w-10 rounded-full overflow-hidden border-2 border-white shadow-sm flex-shrink-0"
+  }, " ", /*#__PURE__*/React.createElement("img", {
+    src: user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${user.displayName}`,
+    alt: "profile"
+  }), " "), " ", /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, " ", /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-black text-slate-800 truncate"
+  }, user.displayName, " 선생님"), " ", /*#__PURE__*/React.createElement("p", {
+    className: "text-[9px] font-bold text-slate-400 truncate"
+  }, user.email), " "), " ", /*#__PURE__*/React.createElement("button", {
+    onClick: handleLogout,
+    title: "로그아웃",
+    className: "p-2 text-slate-400 hover:text-rose-500 transition-colors"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "log-out",
+    size: 16
+  })), " ") : /*#__PURE__*/React.createElement(Button, {
+    variant: "google",
+    className: "w-full py-3",
+    onClick: handleGoogleLogin
+  }, " 구글 로그인 "), " "), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto px-4 custom-scrollbar"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] font-black uppercase text-slate-400 px-4 mb-3 tracking-widest"
+  }, "학급 목록"), classes.length > 0 ? classes.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.id,
+    className: `group flex w-full items-center rounded-2xl mb-2 transition-all p-4 text-sm font-bold border-2 ${selectedClassId === c.id ? "bg-sky-500 text-white border-transparent shadow-lg" : "text-slate-500 bg-white border-transparent hover:bg-slate-50"}`
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSelectedClassId(c.id),
+    className: "flex-1 flex items-center justify-between text-left"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col"
+  }, /*#__PURE__*/React.createElement("span", null, shortClass(c.name)), /*#__PURE__*/React.createElement("span", {
+    className: `text-[10px] font-medium truncate max-w-[120px] ${selectedClassId === c.id ? "text-white/70" : "text-slate-400"}`
+  }, c.lessonTitle === "미설정" ? "진도 미정" : c.lessonTitle)), /*#__PURE__*/React.createElement("span", {
+    className: `ml-auto px-3 py-1 rounded-full text-[10px] font-black ${selectedClassId === c.id ? "bg-white/20 text-white" : "bg-slate-100 text-slate-400"}`
+  }, c.remainingBeforeExam, "회")))) : /*#__PURE__*/React.createElement("div", {
+    className: "px-4 py-8 text-center bg-slate-50 rounded-2xl border-2 border-dashed border-slate-100 mx-4"
+  }, " ", /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] font-bold text-slate-400 leading-relaxed italic text-center"
+  }, "로그인 후 파일을 업로드하세요."), " ")), user && !user.isAnonymous && /*#__PURE__*/React.createElement("div", {
+    className: "p-6 border-t border-slate-100 space-y-3"
+  }, /*#__PURE__*/React.createElement("input", {
+    ref: scheduleFileRef,
+    type: "file",
+    className: "hidden",
+    accept: ".xlsx,.xls,.csv",
+    onChange: handleScheduleUpload
+  }), /*#__PURE__*/React.createElement("input", {
+    ref: eventFileRef,
+    type: "file",
+    className: "hidden",
+    accept: ".xlsx,.xls,.csv",
+    onChange: handleEventUpload
+  }), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: () => scheduleFileRef.current.click(),
+    className: "w-full text-xs py-3 rounded-2xl border-dashed"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "upload",
+    size: 14,
+    className: "mr-2 text-sky-500"
+  }), "시간표 업로드"), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: () => eventFileRef.current.click(),
+    className: "w-full text-xs py-3 rounded-2xl border-dashed"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "calendar",
+    size: 14,
+    className: "mr-2 text-indigo-500"
+  }), "학사일정 동기화"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 flex flex-col overflow-hidden"
+  }, /*#__PURE__*/React.createElement("header", {
+    className: "h-16 flex items-center justify-between px-8 border-b border-slate-100 bg-white z-30 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4"
+  }, " ", /*#__PURE__*/React.createElement("button", {
+    onClick: () => setIsSidebarOpen(!isSidebarOpen),
+    className: "p-2 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "menu"
+  })), " ", /*#__PURE__*/React.createElement("div", {
+    className: "h-6 w-px bg-slate-100 mx-2"
+  }), " ", /*#__PURE__*/React.createElement("button", {
+    onClick: undo,
+    disabled: history.length === 0 || !user,
+    className: "p-2 text-slate-400 hover:bg-slate-50 disabled:opacity-20 rounded-xl flex items-center gap-1 text-[10px] font-bold"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "undo-2",
+    size: 14
+  }), " 취소 (Ctrl+Z)"), " "), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 text-xs font-bold text-slate-400"
+  }, " ", /*#__PURE__*/React.createElement("div", {
+    className: `px-4 py-1.5 rounded-full text-[10px] font-black flex items-center gap-2 ${user ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-slate-100 text-slate-400 border border-slate-200'}`
+  }, " ", /*#__PURE__*/React.createElement("div", {
+    className: `w-1.5 h-1.5 rounded-full ${user ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`
+  }), " ", user ? '서버 연결됨' : '인증 대기', " "), " ", /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: refreshRemaining,
+    disabled: !user,
+    className: "rounded-xl ml-4"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "refresh-cw",
+    size: 14,
+    className: "mr-2 text-sky-500"
+  }), "시수 동기화 (Ctrl+X)"), " ")), /*#__PURE__*/React.createElement("main", {
+    className: "flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-w-full mx-auto space-y-6"
+  }, /*#__PURE__*/React.createElement(Card, {
+    className: "p-0 overflow-hidden border border-slate-100 shadow-xl shadow-slate-200/50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-6 pb-4 flex flex-col md:flex-row justify-between items-center gap-4"
+  }, " ", /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-black text-slate-800 tracking-tight"
+  }, "2026학년도 전체 진도표 (연간 스크롤)"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-bold text-slate-400 mt-1"
+  }, "시간표 위에서 휠을 돌리면 가로로 이동합니다. (위: 과거 / 아래: 미래)")), " ", /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center bg-slate-50 p-1.5 rounded-2xl border border-slate-100 shadow-sm"
+  }, " ", /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => {
+      const todayEl = document.getElementById(`col-${todayStr}`);
+      if (todayEl && scrollContainerRef.current) {
+        const container = scrollContainerRef.current;
+        const leftPos = todayEl.offsetLeft - container.clientWidth / 2 + todayEl.clientWidth / 2;
+        container.scrollTo({
+          left: leftPos,
+          behavior: 'smooth'
+        });
+      }
+    },
+    className: "text-[10px] font-black text-sky-600"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "navigation",
+    size: 12,
+    className: "mr-1"
+  }), " 오늘 위치로 이동"), " "), " "), /*#__PURE__*/React.createElement("div", {
+    ref: scrollContainerRef,
+    className: "timetable-scroll-area custom-scrollbar mx-6 mb-6 border border-slate-100 shadow-inner rounded-[24px]"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex min-w-max"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-14 flex-shrink-0 sticky-left-col"
+  }, " ", /*#__PURE__*/React.createElement("div", {
+    className: "h-[60px] sticky-corner border-b border-slate-100 flex items-center justify-center text-[9px] font-black text-slate-400 uppercase bg-slate-50"
+  }, "교시"), " ", PERIODS.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p,
+    className: "h-20 border-b border-r border-slate-50 flex items-center justify-center font-black text-slate-300 text-base"
+  }, p.replace("교시", ""))), " "), academicYearDays.map((day, dIdx) => {
+    const data = getScheduleForDate(day);
+    const dIso = getLocalIsoString(day);
+    const isToday = dIso === todayStr;
+    return /*#__PURE__*/React.createElement("div", {
+      key: day.toString(),
+      id: `col-${dIso}`,
+      className: `timetable-column border-r border-slate-50 ${isToday ? "today-column shadow-[inset_0_0_20px_rgba(14,165,233,0.05)]" : ""}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `h-[60px] sticky-top border-b border-slate-100 text-center flex flex-col justify-center shadow-sm ${isToday ? "today-header" : "bg-white/90 backdrop-blur-md"}`
+    }, /*#__PURE__*/React.createElement("span", {
+      className: `block text-base font-black leading-none ${isToday ? "text-white" : day.getDay() === 1 ? "text-sky-600" : "text-slate-700"}`
+    }, WEEKDAY_BY_DAY[day.getDay()]), /*#__PURE__*/React.createElement("span", {
+      className: `text-[10px] font-bold mt-1 block ${isToday ? "text-white/80" : "text-slate-400"}`
+    }, day.getMonth() + 1, "/", day.getDate())), PERIODS.map(period => {
+      const item = data.find(d => d.period === period);
+      const isEditing = editingCell?.date === dIso && editingCell?.period === period;
+      const isSelected = selectedCells.some(c => c.date === dIso && c.period === period);
+      const isDragOver = dragOverCell?.date === dIso && dragOverCell?.period === period;
+      let colorClass = "";
+      if (item?.hasAnyEvent) {
+        if (item.eventType === '시험') {
+          colorClass = "bg-indigo-100 border-indigo-400 text-indigo-900";
+        } else if (item.eventType === '휴업') {
+          colorClass = "bg-rose-100 border-rose-400 text-rose-900";
+        } else {
+          colorClass = "bg-emerald-100 border-emerald-400 text-emerald-900";
+        }
+      } else {
+        colorClass = getColorForText(item?.customLabel || item?.lessonTitle);
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: period,
+        className: `h-20 p-1 border-b border-slate-50 transition-all duration-200 ${isDragOver ? "drop-target-active" : ""}`,
+        onDragOver: e => {
+          e.preventDefault();
+          if (dragOverCell?.date !== dIso || dragOverCell?.period !== period) {
+            setDragOverCell({
+              date: dIso,
+              period
+            });
+          }
+        },
+        onDragLeave: () => setDragOverCell(null),
+        onDrop: e => handleDrop(e, dIso, period)
+      }, " ", /*#__PURE__*/React.createElement("div", {
+        draggable: !!item && item.className !== EMPTY_SLOT && !isEditing,
+        onDragStart: e => {
+          if (!item || item.className === EMPTY_SLOT) return;
+          setDragSource({
+            date: dIso,
+            period,
+            className: item.className,
+            label: item.customLabel || ""
+          });
+          e.dataTransfer.setData("application/json", "{}");
+          e.currentTarget.classList.add("dragging-cell");
+        },
+        onDragEnd: e => {
+          e.currentTarget.classList.remove("dragging-cell");
+          setDragOverCell(null);
+        },
+        onClick: e => handleCellClick(e, day, period, item?.className, item?.customLabel),
+        className: `relative h-full group w-full flex flex-col items-center justify-center rounded-2xl border-2 transition-all ${colorClass} ${(!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent ? "bg-transparent border-slate-100 border-dashed opacity-40 hover:opacity-100" : "hover:scale-[1.01] hover:shadow-sm cursor-pointer"} ${isSelected ? "selected-cell" : ""}`
+      }, item?.isEventMode ? /*#__PURE__*/React.createElement("div", {
+        className: "text-center px-1 relative w-full h-full flex flex-col items-center justify-center"
+      }, " ", /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: e => {
+          e.stopPropagation();
+          e.preventDefault();
+          handleDeleteEvent(item.eventId);
+        },
+        className: "absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"
+      }, /*#__PURE__*/React.createElement(Icon, {
+        name: "x",
+        size: 12
+      })), " ", /*#__PURE__*/React.createElement("div", {
+        className: "pointer-events-none"
+      }, " ", /*#__PURE__*/React.createElement("p", {
+        className: "text-[8px] font-black uppercase opacity-60 mb-0.5 leading-none"
+      }, item.eventType), " ", /*#__PURE__*/React.createElement("p", {
+        className: "text-[9px] font-black leading-tight break-all line-clamp-2"
+      }, item.eventTitle), " "), " ") : isEditing ? /*#__PURE__*/React.createElement("div", {
+        className: "absolute inset-0 z-40 bg-white p-2 rounded-2xl shadow-xl border border-sky-400 flex flex-col gap-1.5",
+        onClick: e => e.stopPropagation()
+      }, /*#__PURE__*/React.createElement("select", {
+        value: cellDraftClass,
+        onChange: e => setCellDraftClass(e.target.value),
+        className: `w-full text-[9px] p-1 bg-slate-50 rounded-lg border border-slate-100 font-bold outline-none shadow-inner ${selectedCells.length > 1 ? "opacity-50 pointer-events-none" : ""}`
+      }, selectedCells.length > 1 ? /*#__PURE__*/React.createElement("option", {
+        value: ""
+      }, "학급 유지됨") : /*#__PURE__*/React.createElement("option", {
+        value: EMPTY_SLOT
+      }, "수업 없음"), classes.map(c => /*#__PURE__*/React.createElement("option", {
+        key: c.id,
+        value: c.name
+      }, shortClass(c.name)))), /*#__PURE__*/React.createElement("input", {
+        autoFocus: true,
+        value: cellDraftLabel,
+        onChange: e => setCellDraftLabel(e.target.value),
+        onKeyDown: e => {
+          if (e.key === 'Enter') saveCellEdit();
+          if (e.key === 'Escape') {
+            setEditingCell(null);
+            setSelectedCells([]);
+          }
+        },
+        className: "w-full text-[9px] p-1 bg-slate-50 border border-slate-100 rounded-lg outline-none shadow-inner",
+        placeholder: "활동명 입력 (Enter 저장)"
+      }), /*#__PURE__*/React.createElement("div", {
+        className: "mt-auto flex gap-1"
+      }, /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: saveCellEdit,
+        className: "flex-1 bg-sky-500 text-white rounded-lg text-[9px] font-black py-1 shadow-sm"
+      }, "저장"), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: () => {
+          setEditingCell(null);
+          setSelectedCells([]);
+        },
+        className: "flex-1 bg-slate-100 text-slate-500 rounded-lg text-[9px] font-black py-1"
+      }, "취소"))) : /*#__PURE__*/React.createElement("div", {
+        className: "w-full h-full flex flex-col items-center justify-center px-2 overflow-hidden relative"
+      }, " ", item?.hasAnyEvent && /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: e => {
+          e.stopPropagation();
+          e.preventDefault();
+          handleDeleteEvent(item.eventId);
+        },
+        className: "absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 hover:bg-black/10 rounded-full transition-all z-[999] cursor-pointer pointer-events-auto"
+      }, /*#__PURE__*/React.createElement(Icon, {
+        name: "x",
+        size: 12
+      })), " ", item?.className !== EMPTY_SLOT && /*#__PURE__*/React.createElement("span", {
+        className: "font-black text-[13px] tracking-tighter leading-none pointer-events-none"
+      }, " ", shortClass(item?.className), " ", item?.isClassChanged && /*#__PURE__*/React.createElement("span", {
+        className: "text-[7px] text-amber-600 ml-0.5 font-bold"
+      }, "(수)"), " "), " ", item?.className === EMPTY_SLOT && item?.hasAnyEvent && /*#__PURE__*/React.createElement("p", {
+        className: "text-[9px] font-black leading-tight break-all line-clamp-2 text-center pointer-events-none"
+      }, item.eventTitle), " ", item?.className !== EMPTY_SLOT && item?.hasAnyEvent && /*#__PURE__*/React.createElement("span", {
+        className: `text-[8px] font-black mt-0.5 pointer-events-none ${item.isChangche ? 'text-emerald-700' : 'opacity-70'}`
+      }, " ", item.isChangche ? '창체' : item.eventTitle.length > 4 ? item.eventTitle.slice(0, 4) + '..' : item.eventTitle, " "), " ", item?.customLabel && /*#__PURE__*/React.createElement("span", {
+        className: "text-[8px] font-bold mt-0.5 leading-tight break-all line-clamp-2 px-1 text-center pointer-events-none"
+      }, item.customLabel), " ", (!item || item.className === EMPTY_SLOT) && !item?.hasAnyEvent && /*#__PURE__*/React.createElement("span", {
+        className: "text-slate-200 pointer-events-none"
+      }, "-"), " ")));
+    }));
+  })))), selectedClass && /*#__PURE__*/React.createElement(Card, {
+    className: "p-8 shadow-xl shadow-slate-200/40 animate-in fade-in duration-300"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 mb-8"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "edit-3",
+    className: "text-sky-500",
+    size: 20
+  }), /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-black text-slate-800 tracking-tight"
+  }, "학급별 상세 진도 기록")), /*#__PURE__*/React.createElement("div", {
+    className: "grid lg:grid-cols-2 gap-10"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-slate-50 p-5 rounded-[24px] border border-slate-100 shadow-inner"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[9px] font-black text-slate-400 mb-1 uppercase"
+  }, "선택 학급"), /*#__PURE__*/React.createElement("span", {
+    className: "text-2xl font-black text-slate-800"
+  }, shortClass(selectedClass.name))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col items-end"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] font-bold text-slate-400 mb-1"
+  }, "시험까지 남은 수업"), /*#__PURE__*/React.createElement("span", {
+    className: "bg-sky-500 px-3 py-1 rounded-full text-[11px] font-black text-white shadow-lg"
+  }, selectedClass.remainingBeforeExam, "회")))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "현재 진행 단원"), /*#__PURE__*/React.createElement("input", {
+    value: selectedClass.lessonTitle || "",
+    onChange: e => {
+      const val = e.target.value;
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? {
+        ...c,
+        lessonTitle: val
+      } : c));
+    },
+    onKeyDown: e => e.key === 'Enter' && updateClassOnServer(),
+    className: "w-full px-5 py-3.5 bg-white border border-slate-200 rounded-2xl outline-none font-bold text-sm shadow-sm",
+    placeholder: "단원명을 기록하세요"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2 flex flex-col"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "수업 특이사항 메모"), /*#__PURE__*/React.createElement("textarea", {
+    value: selectedClass.memo || "",
+    onChange: e => {
+      const val = e.target.value;
+      setClasses(prev => prev.map(c => c.id === selectedClass.id ? {
+        ...c,
+        memo: val
+      } : c));
+    },
+    className: "flex-1 w-full p-6 bg-slate-50 border border-slate-100 rounded-[32px] outline-none text-sm font-medium custom-scrollbar shadow-inner",
+    placeholder: "반별 특이사항을 기록하세요..."
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-8 flex justify-end"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "fuchsia",
+    className: "px-10 py-5 rounded-2xl shadow-lg shadow-fuchsia-100",
+    onClick: updateClassOnServer
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "save",
+    size: 18,
+    className: "mr-2"
+  }), "진도 저장하기"))), /*#__PURE__*/React.createElement(Card, {
+    className: "p-8 shadow-xl shadow-slate-200/40"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 mb-6"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "calendar-plus",
+    className: "text-indigo-500"
+  }), /*#__PURE__*/React.createElement("h2", {
+    className: "text-xl font-black text-slate-800 tracking-tight"
+  }, "개별 학사 일정 관리")), /*#__PURE__*/React.createElement("div", {
+    className: "grid lg:grid-cols-3 gap-8"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-2 bg-slate-50 p-8 rounded-[32px] border border-slate-100 shadow-inner"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-6 items-end"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "날짜 선택"), /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: manualDate,
+    onChange: e => setManualDate(e.target.value),
+    className: "w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "일정 유형"), /*#__PURE__*/React.createElement("select", {
+    value: manualType,
+    onChange: e => setManualType(e.target.value),
+    className: "w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold bg-white shadow-sm"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "휴업"
+  }, "휴업 (수업제외)"), /*#__PURE__*/React.createElement("option", {
+    value: "시험"
+  }, "시험 (수업제외)"), /*#__PURE__*/React.createElement("option", {
+    value: "행사(수업제외)"
+  }, "행사 (수업제외)"), /*#__PURE__*/React.createElement("option", {
+    value: "행사"
+  }, "행사 (수업포함)")))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "교시 선택 (중복 가능)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2"
+  }, ["전교시", ...PERIODS].map(p => /*#__PURE__*/React.createElement("button", {
+    key: p,
+    type: "button",
+    onClick: () => {
+      if (p === "전교시") {
+        setManualPeriods(["전교시"]);
+      } else {
+        const next = manualPeriods.includes("전교시") ? [] : [...manualPeriods];
+        if (next.includes(p)) {
+          const filtered = next.filter(x => x !== p);
+          setManualPeriods(filtered.length === 0 ? ["전교시"] : filtered);
+        } else {
+          setManualPeriods([...next, p]);
+        }
+      }
+    },
+    className: `px-3 py-1.5 rounded-xl text-[10px] font-black border transition-all ${manualPeriods.includes(p) ? "bg-sky-500 text-white border-transparent shadow-md" : "bg-white text-slate-500 border-slate-200"}`
+  }, " ", p === "전교시" ? "하루종일" : p.replace("교시", ""), " ")))), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "text-[10px] font-black text-slate-400 uppercase ml-2"
+  }, "일정 내용"), /*#__PURE__*/React.createElement("input", {
+    value: manualTitle,
+    onChange: e => setManualTitle(e.target.value),
+    onKeyDown: e => e.key === 'Enter' && handleAddManualEvent(),
+    placeholder: "예: 기말고사(2학년) 혹은 재량휴업",
+    className: "w-full px-5 py-4 rounded-2xl border border-slate-200 outline-none text-sm font-bold shadow-sm"
+  })), /*#__PURE__*/React.createElement(Button, {
+    onClick: handleAddManualEvent,
+    className: "w-full py-4 shadow-lg text-base"
+  }, "일정 추가하기"))), /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-1 flex flex-col h-full bg-white border border-slate-100 rounded-[32px] shadow-sm p-6 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] font-black text-slate-400 uppercase mb-4 tracking-widest flex items-center gap-1"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "list",
+    size: 12
+  }), " 전체 학사 일정 리스트"), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto custom-scrollbar"
+  }, events.length > 0 ? events.sort((a, b) => a.date.localeCompare(b.date)).map(e => /*#__PURE__*/React.createElement("div", {
+    key: e.id,
+    className: "flex items-center justify-between p-3 mb-2 hover:bg-slate-50 rounded-2xl transition-colors border border-slate-50"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[10px] font-black text-slate-400"
+  }, e.date.slice(5)), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold text-slate-700"
+  }, e.title, " ", e.period && e.period !== '전교시' && `(${e.period.replace('교시', '')})`)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: ev => {
+      ev.stopPropagation();
+      handleDeleteEvent(e.id);
+    },
+    className: "p-2 text-slate-300 hover:text-rose-500 transition-colors"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "trash-2",
+    size: 14
+  })))) : /*#__PURE__*/React.createElement("div", {
+    className: "h-full flex items-center justify-center text-[10px] font-bold text-slate-300 py-10 italic"
+  }, "등록된 일정이 없습니다.")))))))));
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(/*#__PURE__*/React.createElement(App, null));
     </script>
 </body>
 </html>
